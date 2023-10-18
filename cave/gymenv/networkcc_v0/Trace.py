@@ -1,5 +1,7 @@
-import argparse
+from ...import util
+from ...CONSTANT import BITS_PER_BYTE, BYTES_PER_PACKET
 from bisect import bisect_right
+import argparse
 import copy
 import csv
 import random
@@ -7,8 +9,6 @@ import os
 from typing import List, Tuple, Union, Optional
 
 import numpy as np
-from ...common.utils import read_json_file, set_seed, write_json_file, pcc_aurora_reward
-from ...CONSTANT import BITS_PER_BYTE, BYTES_PER_PACKET
 from .Flow import Flow
 
 
@@ -183,9 +183,9 @@ class Trace():
             return self.bandwidths[-1]
         return self.bandwidths[self.idx]
 
-    def get_delay(self, ts: float):
-        """Return link one-way delay(millisecond) at ts(second)."""
-        while self.idx + 1 < len(self.timestamps) and self.timestamps[self.idx + 1] <= ts:
+    def get_delay(self, timestamp: float):
+        """Return link one-way delay(millisecond) at timestamp(second)."""
+        while self.idx + 1 < len(self.timestamps) and self.timestamps[self.idx + 1] <= timestamp:
             self.idx += 1
         if self.idx >= len(self.delays):
             return self.delays[-1]
@@ -218,13 +218,13 @@ class Trace():
             return self.noises[-1]
         return self.noises[self.noise_idx]
 
-    def is_finished(self, ts: float):
+    def is_terminated(self, timestamp: float):
         """Return if trace is finished."""
-        return ts >= self.timestamps[-1]
+        return timestamp >= self.timestamps[-1]
 
     def __str__(self):
         return ("Timestamps: {}s,\nBandwidth: {}Mbps,\nLink delay: {}ms,\n"
-                "Link loss: {:.3f}, Queue: {}packets".format(
+                "Link loss: {:.3f}, Queue: {} packets".format(
                     self.timestamps, self.bandwidths, self.delays,
                     self.loss_rate, self.queue_size))
 
@@ -244,7 +244,7 @@ class Trace():
 
     @staticmethod
     def load_from_file(filename: str):
-        trace_data = read_json_file(filename)
+        trace_data = util.lib.read_json_file(filename)
         tr = Trace(trace_data['timestamps'], trace_data['bandwidths'],
                    trace_data['delays'], trace_data['loss'],
                    trace_data['queue'], delay_noise=trace_data['delay_noise']
@@ -325,7 +325,7 @@ class Trace():
         self.bandwidths = bandwidths
 
 
-def generate_trace(duration_range: Tuple[float, float],
+def generate_trace_fn(duration_range: Tuple[float, float],
                    bandwidth_lower_bound_range: Tuple[float, float],
                    bandwidth_upper_bound_range: Tuple[float, float],
                    delay_range: Tuple[float, float],
@@ -391,19 +391,10 @@ def generate_trace(duration_range: Tuple[float, float],
     return ret_trace
 
 
-def generate_traces(config_file: str, tot_trace_cnt: int, duration: int) -> List[Trace]:
+def generate_traces(config: str, num: int, duration: int) -> List[Trace]:
     traces = []
-    for _ in range(tot_trace_cnt):
-        trace = generate_trace_from_config_file(config_file, duration)
-        traces.append(trace)
-    return traces
-
-
-def generate_traces_from_config(config, tot_trace_cnt: int, duration: int) -> List[Trace]:
-    traces = []
-    for _ in range(tot_trace_cnt):
-        trace = generate_trace_from_config(config, duration)
-        traces.append(trace)
+    for i in range(num):
+        traces.append(generate_trace(config, duration))
     return traces
 
 
@@ -461,12 +452,12 @@ def generate_bw_delay_series(T_s: float, duration: float,
     return timestamps, bandwidths, delays
 
 
-def generate_trace_from_config_file(config_file: str, duration: int = 30) -> Trace:
-    config = read_json_file(config_file)
-    return generate_trace_from_config(config, duration)
+def generate_trace(config: str, duration: int = 30) -> Trace:
+    try:
+        config = util.lib.load_json(config)
+    except:
+        config = config 
 
-
-def generate_trace_from_config(config, duration: int = 30) -> Trace:
     weight_sum = 0
     weights = []
     for env_config in config:
@@ -507,7 +498,7 @@ def generate_trace_from_config(config, duration: int = 30) -> Trace:
 
 
 def generate_configs(config_file: str, n: int):
-    config_range = read_json_file(config_file)[0]
+    config_range = util.lib.load_json(config_file)[0]
     configs = []
 
     for _ in range(n):
@@ -548,14 +539,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    set_seed(args.seed)
+    util.lib.set_seed(args.seed)
     assert args.count < 100000
     for i in range(args.count):
-        trace = generate_trace_from_config_file(args.config_file)
+        trace = generate_trace(args.config_file)
         trace_file = os.path.join(args.save_dir, 'trace_{:05d}.json'.format(i))
         os.makedirs(args.save_dir, exist_ok=True)
         trace.dump(trace_file)
-
 
 if __name__ == '__main__':
     main()

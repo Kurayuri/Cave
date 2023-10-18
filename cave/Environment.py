@@ -3,16 +3,16 @@ import random
 import numpy as np
 import gymnasium as gym
 from .gymenv import NetworkCCEnv
-from .gymenv.networkcc_v0.Trace import generate_trace
+from .gymenv.networkcc_v0.Trace import generate_trace_fn
 
 
 class Environment(gym.Wrapper):
     def __init__(self, env_name, reward_api: str = "", log_dirpath: str = ""):
         # env = gym.make(env_name, render_mode="rgb_array")
-        dummy_trace = generate_trace(
+        dummy_trace = generate_trace_fn(
             (10, 10), (2, 2), (2, 2), (50, 50), (0, 0), (1, 1), (0, 0), (0, 0))
-        env = NetworkCCEnv([dummy_trace])
-            
+        env = NetworkCCEnv(traces=[dummy_trace])
+
         super().__init__(env)
 
         # TODO
@@ -45,20 +45,18 @@ class Environment(gym.Wrapper):
 
     def call_reward_api(self, obs, action, reward):
         if callable(self.reward_api):
-            # reward, violated = self.reward_api([list(obs)], list(action))
-            reward_, violated = self.reward_api(obs, action)
+            _reward_, occured, violated = self.reward_api(obs, action, reward)
         else:
-            # violated = self.is_violated_func([list(obs)], list(action))
             occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
-            reward_ = self.get_reward_func(violated, reward, obs.reshape(1, -1), action.reshape(1, -1))
+            _reward_ = self.get_reward_func(violated, reward, obs.reshape(1, -1), action.reshape(1, -1))
 
-        self.log(obs, action, reward, reward_, logger=self.logger_all)
+        self.log(obs, action, reward, _reward_, logger=self.logger_all)
         if occured:
-            self.log(obs, action, reward, reward_, logger=self.logger_occurred)
+            self.log(obs, action, reward, _reward_, logger=self.logger_occurred)
         if violated:
-            self.log(obs, action, reward, reward_, logger=self.logger_violated)
+            self.log(obs, action, reward, _reward_, logger=self.logger_violated)
 
-        return reward_
+        return _reward_
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)

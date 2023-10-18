@@ -5,4 +5,4 @@
 
 # gym.register(id='NetworkCC-v0', entry_point='networkcc_v0.env:NetworkCCEnv')
 
-from .networkcc_v0.env import NetworkCCEnv
+from .networkcc_v0.Env import NetworkCCEnv

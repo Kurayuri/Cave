@@ -9,14 +9,14 @@ from typing import Dict, Optional
 import numpy as np
 
 
-def read_json_file(filename):
+def load_json(filename):
     """Load json object from a file."""
     with open(filename, 'r') as f:
         content = json.load(f)
     return content
 
 
-def write_json_file(filename, content):
+def dump_json(filename, content):
     """Dump into a json file."""
     with open(filename, 'w') as f:
         json.dump(content, f, indent=4)
@@ -93,7 +93,7 @@ def save_args(args, save_dir: str):
     """Write arguments to a log file."""
     os.makedirs(save_dir, exist_ok=True)
     if save_dir and os.path.exists(save_dir):
-        write_json_file(os.path.join(save_dir, 'cmd.json'), args.__dict__)
+        dump_json(os.path.join(save_dir, 'cmd.json'), args.__dict__)
 
 
 def zero_one_normalize(data):

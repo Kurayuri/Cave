@@ -14,7 +14,7 @@
 from .Trace import generate_traces
 from .Link import Link
 from ...CONSTANT import *
-from ...common.utils import pcc_aurora_reward
+from ...util.lib import pcc_aurora_reward
 from ...common import sender_obs
 import numpy as np
 from typing import Tuple, List
@@ -43,6 +43,9 @@ def debug_print(msg):
 
 
 class Sender():
+    ACTION_RATE_DELTA = 1
+    ACTION_CWND_DELTA = 2
+        
 
     def __init__(self, rate, path, dest, features, cwnd=25, history_len=10,
                  delta_scale=1):
@@ -103,6 +106,10 @@ class Sender():
         self.lats = []
         self.bin_size = 500  # ms
 
+        self.act_func = {
+            self.ACTION_CWND_DELTA: self.apply_rate_delta,
+            self.ACTION_RATE_DELTA: self.apply_cwnd_delta
+        }
     _next_id = 1
 
     @property
@@ -157,6 +164,11 @@ class Sender():
         result = Sender._next_id
         Sender._next_id += 1
         return result
+    
+
+    def act(self,action_type,action):
+        self.act_func[action_type](action)
+
 
     def apply_rate_delta(self, delta):
         # if self.got_data:
@@ -190,10 +202,10 @@ class Sender():
         self.bytes_in_flight += BYTES_PER_PACKET
         self.tot_sent += 1
         if self.first_sent_ts is None:
-            self.first_sent_ts = self.net.get_cur_time()
-        self.last_sent_ts = self.net.get_cur_time()
+            self.first_sent_ts = self.net.get_curr_time()
+        self.last_sent_ts = self.net.get_curr_time()
 
-        bin_id = int((self.net.get_cur_time() - self.first_sent_ts) * 1000 / self.bin_size)
+        bin_id = int((self.net.get_curr_time() - self.first_sent_ts) * 1000 / self.bin_size)
         self.bin_bytes_sent[bin_id] = self.bin_bytes_sent.get(bin_id, 0) + BYTES_PER_PACKET
 
     def on_packet_acked(self, rtt):
@@ -201,8 +213,8 @@ class Sender():
         self.cur_avg_latency = (self.cur_avg_latency * self.tot_acked + rtt) / (self.tot_acked + 1)
         self.tot_acked += 1
         if self.first_ack_ts is None:
-            self.first_ack_ts = self.net.get_cur_time()
-        self.last_ack_ts = self.net.get_cur_time()
+            self.first_ack_ts = self.net.get_curr_time()
+        self.last_ack_ts = self.net.get_curr_time()
 
         self.min_rtt = min(self.min_rtt, rtt)
         if self.estRTT is None and self.RTTVar is None:
@@ -216,7 +228,7 @@ class Sender():
 
         self.acked += 1
         self.rtt_samples.append(rtt)
-        self.rtt_samples_ts.append(self.net.get_cur_time())
+        self.rtt_samples_ts.append(self.net.get_curr_time())
         # self.rtt_samples.append(self.estRTT)
         if (self.min_latency is None) or (rtt < self.min_latency):
             self.min_latency = rtt
@@ -225,9 +237,9 @@ class Sender():
             self.got_data = len(self.rtt_samples) >= 1
         # self.got_data = True
 
-        bin_id = int((self.net.get_cur_time() - self.first_ack_ts) * 1000 / self.bin_size)
+        bin_id = int((self.net.get_curr_time() - self.first_ack_ts) * 1000 / self.bin_size)
         self.bin_bytes_acked[bin_id] = self.bin_bytes_acked.get(bin_id, 0) + BYTES_PER_PACKET
-        self.lat_ts.append(self.net.get_cur_time())
+        self.lat_ts.append(self.net.get_curr_time())
         self.lats.append(rtt * 1000)
 
     def on_packet_lost(self, rtt):
@@ -264,7 +276,7 @@ class Sender():
 
     def get_run_data(self):
         assert self.net
-        obs_end_time = self.net.get_cur_time()
+        obs_end_time = self.net.get_curr_time()
 
         #obs_dur = obs_end_time - self.obs_start_time
         #print("Got %d acks in %f seconds" % (self.acked, obs_dur))
@@ -321,7 +333,7 @@ class Sender():
         self.rtt_samples = []
         self.rtt_samples_ts = []
         self.queue_delay_samples = []
-        self.obs_start_time = self.net.get_cur_time()
+        self.obs_start_time = self.net.get_curr_time()
 
     def print_debug(self):
         print("Sender:")

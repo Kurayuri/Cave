@@ -114,7 +114,6 @@ class SenderMonitorIntervalMetric():
         return SenderMonitorIntervalMetric._all_metrics[name]
 
 def get_min_obs_vector(feature_names):
-    # print("Getting min obs for %s" % feature_names)
     result = []
     for feature_name in feature_names:
         feature = SenderMonitorIntervalMetric.get_by_name(feature_name)

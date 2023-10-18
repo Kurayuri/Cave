@@ -11,15 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .Trace import generate_traces
-from .Link import Link
 from ...CONSTANT import *
-from ...common.utils import pcc_aurora_reward
+from ...util.lib import pcc_aurora_reward
 from ...common import sender_obs
-import gymnasium as gym
-from gymnasium.utils import seeding
-from gymnasium.envs.registration import register
-from gymnasium import spaces
 import numpy as np
 from typing import Tuple, List
 import heapq
@@ -28,7 +22,6 @@ import random
 import sys
 import time
 import warnings
-warnings.simplefilter(action='ignore', category=UserWarning)
 
 
 LATENCY_PENALTY = 1.0
@@ -37,8 +30,8 @@ LOSS_PENALTY = 1.0
 USE_LATENCY_NOISE = True
 MAX_LATENCY_NOISE = 1.1
 
-# DEBUG = True
 DEBUG = False
+DEBUG = True
 
 
 def debug_print(msg):
@@ -47,46 +40,35 @@ def debug_print(msg):
 
 
 class Network():
-
     def __init__(self, senders, links, env):
         self.event_count = 0
-        self.q = []
-        self.cur_time = 0.0
         self.senders = senders
         self.links = links
-        self.queue_initial_packets()
         self.env = env
-
-        self.pkt_log = []
-
-        # self.recv_rate_cache = []
-
-    def queue_initial_packets(self):
-        for sender in self.senders:
-            sender.register_network(self)
-            sender.reset_obs()
-            heapq.heappush(self.q, (0, sender, EVENT_TYPE_SEND,
-                                    0, 0.0, False, self.event_count, sender.rto, 0.0))
-            self.event_count += 1
+        self.reset()
 
     def reset(self):
         self.pkt_log = []
-        self.cur_time = 0.0
-        self.q = []
+        self.curr_timestamp = 0.0
+        self.event_queue = []
         [link.reset() for link in self.links]
-        [sender.reset() for sender in self.senders]
-        self.queue_initial_packets()
-        # self.recv_rate_cache = []
+        # [sender.reset() for sender in self.senders]
 
-    def get_cur_time(self):
-        return self.cur_time
+        for sender in self.senders:
+            sender.register_network(self)
+            sender.reset_obs()
+            heapq.heappush(self.event_queue, (0, sender, EVENT_TYPE_SEND,
+                                    0, 0.0, False, self.event_count, sender.rto, 0.0))
+            self.event_count += 1
 
-    def run_for_dur(self, dur, action=None):
+    def get_curr_time(self):
+        return self.curr_timestamp
+
+    def run_for_duration(self, duration, action=None):
         if self.senders[0].lat_diff != 0:
             self.senders[0].start_stage = False
-        start_time = self.cur_time
-        end_time = min(self.cur_time + dur,
-                       self.env.current_trace.timestamps[-1])
+        stime = self.curr_timestamp
+        etime = min(self.curr_timestamp + duration, self.env.current_trace.timestamps[-1])
         # debug_print('MI from {} to {}, dur {}'.format(
         #     self.cur_time, end_time, dur))
         for sender in self.senders:
@@ -95,19 +77,20 @@ class Network():
         extra_delays = []  # time used to put packet onto the network
         while True:
             event_time, sender, event_type, next_hop, cur_latency, dropped, \
-                event_id, rto, event_queue_delay = self.q[0]
+                event_id, rto, event_queue_delay = self.event_queue[0]
             # if not sender.got_data and event_time >= end_time and event_type == EVENT_TYPE_ACK and next_hop == len(sender.path):
             #     end_time = event_time
             #     self.cur_time = end_time
             #     self.env.run_dur = end_time - start_time
             #     break
-            if sender.got_data and event_time >= end_time and event_type == EVENT_TYPE_SEND:
-                end_time = event_time
-                self.cur_time = end_time
+            if sender.got_data and event_time >= etime and event_type == EVENT_TYPE_SEND:
+                etime = event_time
+                self.curr_timestamp = etime
                 break
+
             event_time, sender, event_type, next_hop, cur_latency, dropped, \
-                event_id, rto, event_queue_delay = heapq.heappop(self.q)
-            self.cur_time = event_time
+                event_id, rto, event_queue_delay = heapq.heappop(self.event_queue)
+            self.curr_timestamp = event_time
             new_event_time = event_time
             new_event_type = event_type
             new_next_hop = next_hop
@@ -115,17 +98,17 @@ class Network():
             new_dropped = dropped
             new_event_queue_delay = event_queue_delay
             push_new_event = False
-            # debug_print("Got %d event %s, to link %d, latency %f at time %f, "
-            #             "next_hop %d, dropped %s, event_q length %f, "
-            #             "sender rate %f, duration: %f, queue_size: %f, "
-            #             "rto: %f, cwnd: %f, ssthresh: %f, sender rto %f, "
-            #             "pkt in flight %d, wait time %d" % (
-            #                 event_id, event_type, next_hop, cur_latency,
-            #                 event_time, next_hop, dropped, len(self.q),
-            #                 sender.rate, dur, self.links[0].queue_size,
-            #                 rto, sender.cwnd, sender.ssthresh, sender.rto,
-            #                 int(sender.bytes_in_flight/BYTES_PER_PACKET),
-            #                 sender.pkt_loss_wait_time))
+            debug_print("Got %d event %s, to link %d, latency %f at time %f, "
+                        "next_hop %d, dropped %s, event_q length %f, "
+                        "sender rate %f, duration: %f, queue_size: %f, "
+                        "rto: %f, cwnd: %f, ssthresh: %f, sender rto %f, "
+                        "pkt in flight %d, wait time %d" % (
+                            event_id, event_type, next_hop, cur_latency,
+                            event_time, next_hop, dropped, len(self.event_queue),
+                            sender.rate, duration, self.links[0].queue_size,
+                            rto, sender.cwnd, sender.ssthresh, sender.rto,
+                            int(sender.bytes_in_flight/BYTES_PER_PACKET),
+                            sender.pkt_loss_wait_time))
             if event_type == EVENT_TYPE_ACK:
                 if next_hop == len(sender.path):
                     # if cur_latency > 1.0:
@@ -139,22 +122,22 @@ class Network():
                         sender.on_packet_lost(cur_latency)
                         if self.env.record_pkt_log:
                             self.pkt_log.append(
-                                [self.cur_time, event_id, 'lost',
+                                [self.curr_timestamp, event_id, 'lost',
                                  BYTES_PER_PACKET, cur_latency, event_queue_delay,
                                  self.links[0].pkt_in_queue,
                                  sender.rate * BYTES_PER_PACKET * BITS_PER_BYTE,
-                                 self.links[0].get_bandwidth(self.cur_time) * BYTES_PER_PACKET * BITS_PER_BYTE])
+                                 self.links[0].get_bandwidth(self.curr_timestamp) * BYTES_PER_PACKET * BITS_PER_BYTE])
                     else:
                         sender.on_packet_acked(cur_latency)
                         # debug_print('Ack packet at {}'.format(self.cur_time))
                         # log packet acked
                         if self.env.record_pkt_log:
                             self.pkt_log.append(
-                                [self.cur_time, event_id, 'acked',
+                                [self.curr_timestamp, event_id, 'acked',
                                  BYTES_PER_PACKET, cur_latency,
                                  event_queue_delay, self.links[0].pkt_in_queue,
                                  sender.rate * BYTES_PER_PACKET * BITS_PER_BYTE,
-                                 self.links[0].get_bandwidth(self.cur_time) * BYTES_PER_PACKET * BITS_PER_BYTE])
+                                 self.links[0].get_bandwidth(self.curr_timestamp) * BYTES_PER_PACKET * BITS_PER_BYTE])
                 else:
                     # comment out to save disk usage
                     # if self.env.record_pkt_log:
@@ -165,10 +148,10 @@ class Network():
                     #          sender.rate * BYTES_PER_PACKET * BITS_PER_BYTE,
                     #          self.links[0].get_bandwidth(self.cur_time) * BYTES_PER_PACKET * BITS_PER_BYTE])
                     new_next_hop = next_hop + 1
-                    # new_event_queue_delay += sender.path[next_hop].get_cur_queue_delay(
+                    # new_event_queue_delay += sender.path[next_hop].get_curr_queue_delay(
                     #     self.cur_time)
-                    link_latency = sender.path[next_hop].get_cur_propagation_latency(
-                        self.cur_time)
+                    link_latency = sender.path[next_hop].get_curr_propagation_latency(
+                        self.curr_timestamp)
                     # link_latency *= self.env.current_trace.get_delay_noise_replay(self.cur_time)
                     # if USE_LATENCY_NOISE:
                     # link_latency *= random.uniform(1.0, MAX_LATENCY_NOISE)
@@ -182,13 +165,13 @@ class Network():
                         # print('Send packet at {}'.format(self.cur_time))
                         if not self.env.train_flag and self.env.record_pkt_log:
                             self.pkt_log.append(
-                                [self.cur_time, event_id, 'sent',
+                                [self.curr_timestamp, event_id, 'sent',
                                  BYTES_PER_PACKET, cur_latency,
                                  event_queue_delay, self.links[0].pkt_in_queue,
                                  sender.rate * BYTES_PER_PACKET * BITS_PER_BYTE,
-                                 self.links[0].get_bandwidth(self.cur_time) * BYTES_PER_PACKET * BITS_PER_BYTE])
+                                 self.links[0].get_bandwidth(self.curr_timestamp) * BYTES_PER_PACKET * BITS_PER_BYTE])
                         push_new_event = True
-                    heapq.heappush(self.q, (self.cur_time + (1.0 / sender.rate),
+                    heapq.heappush(self.event_queue, (self.curr_timestamp + (1.0 / sender.rate),
                                             sender, EVENT_TYPE_SEND, 0, 0.0,
                                             False, self.event_count, sender.rto,
                                             0.0))
@@ -201,8 +184,8 @@ class Network():
                     new_event_type = EVENT_TYPE_ACK
                 new_next_hop = next_hop + 1
 
-                prop_delay, new_event_queue_delay = sender.path[next_hop].get_cur_latency(
-                    self.cur_time)
+                prop_delay, new_event_queue_delay = sender.path[next_hop].get_curr_latency(
+                    self.curr_timestamp)
                 link_latency = prop_delay + new_event_queue_delay
                 # if USE_LATENCY_NOISE:
                 # link_latency *= random.uniform(1.0, MAX_LATENCY_NOISE)
@@ -220,17 +203,17 @@ class Network():
                 # link_latency *= self.env.current_trace.get_delay_noise_replay(self.cur_time)
                 new_latency += link_latency
                 new_event_time += link_latency
-                new_dropped = not sender.path[next_hop].packet_enters_link(
-                    self.cur_time)
+                new_dropped = not sender.path[next_hop].on_pkt_enter_link(
+                    self.curr_timestamp)
                 extra_delays.append(
-                    1 / self.links[0].get_bandwidth(self.cur_time))
+                    1 / self.links[0].get_bandwidth(self.curr_timestamp))
                 # new_latency += 1 / self.links[0].get_bandwidth(self.cur_time)
                 # new_event_time += 1 / self.links[0].get_bandwidth(self.cur_time)
                 if not new_dropped:
                     sender.queue_delay_samples.append(new_event_queue_delay)
 
             if push_new_event:
-                heapq.heappush(self.q, (new_event_time, sender, new_event_type,
+                heapq.heappush(self.event_queue, (new_event_time, sender, new_event_type,
                                         new_next_hop, new_latency, new_dropped,
                                         event_id, rto, float(new_event_queue_delay)))
         for sender in self.senders:
@@ -242,7 +225,7 @@ class Network():
         loss = sender_mi.get("loss ratio")
         # debug_print("thpt %f, delay %f, loss %f, bytes sent %f, bytes acked %f" % (
         #     throughput/1e6, latency, loss, sender_mi.bytes_sent, sender_mi.bytes_acked))
-        avg_bw_in_mi = self.env.current_trace.get_avail_bits2send(start_time, end_time) / (end_time - start_time) / BITS_PER_BYTE / BYTES_PER_PACKET
+        avg_bw_in_mi = self.env.current_trace.get_avail_bits2send(stime, etime) / (etime - stime) / BITS_PER_BYTE / BYTES_PER_PACKET
         # avg_bw_in_mi = np.mean(self.env.current_trace.bandwidths) * 1e6 / BITS_PER_BYTE / BYTES_PER_PACKET
         reward = pcc_aurora_reward(
             throughput / BITS_PER_BYTE / BYTES_PER_PACKET, latency, loss,
