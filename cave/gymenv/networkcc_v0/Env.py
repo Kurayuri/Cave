@@ -20,13 +20,13 @@ class NetworkCCEnv(gym.Env):
     def __init__(self, history_len=10,
                  # features="sent latency inflation,latency ratio,send ratio",
                  features="sent latency inflation,latency ratio,recv ratio",
-                 train_flag=False, delta_scale=1.0, traces=[],  trace_config=None, real_trace_prob: float = 0,
+                 train_flag=True, delta_scale=1.0, traces=[],  env_config=None, real_trace_prob: float = 0,
                  record_pkt_log: bool = False):
         """Network environment used in simulation.
         congestion_control_type: aurora is pcc-rl. cubic is TCPCubic.
         """
         self.real_trace_prob = real_trace_prob
-        self.trace_config = trace_config
+        self.trace_config = env_config
         self.traces = traces
 
         self.record_pkt_log = record_pkt_log
@@ -80,7 +80,7 @@ class NetworkCCEnv(gym.Env):
 
         # choose real trace with a probability. otherwise, use synthetic trace
         if self.train_flag and self.trace_config:
-            self.current_trace = Trace.generate_traces(self.trace_config, 1, duration=30)[0]
+            self.current_trace = Trace.generate_trace_from_config(self.trace_config)
             if random.uniform(0, 1) < self.real_trace_prob and self.traces:
                 config_syn = np.array(self.current_trace.real_trace_configs(normalized=True)).reshape(1, -1)
                 assert self.real_trace_configs is not None
@@ -113,9 +113,9 @@ class NetworkCCEnv(gym.Env):
         self.episodes_run += 1        
         self.net.run_for_duration(self.timestamp_granularity)
         self.reward_ewma = 0.99 * self.reward_ewma + 0.01 * self.reward_sum
-        self.reward_sum = 0.0
         
-        print(self.reward_ewma, self.steps_taken)
+        # print(self.episodes_run,self.reward_ewma,self.reward_sum, self.steps_taken)
+        self.reward_sum = 0.0
         self.steps_taken = 0
         return self.get_sender_obs(), {}
 
@@ -125,15 +125,12 @@ class NetworkCCEnv(gym.Env):
     def step(self, actions):
         for i in range(len(actions)):
             self.senders[i].act(self.action_type, actions[i])
-
         reward = self.net.run_for_duration(self.timestamp_granularity, action=actions[0])
-        print(self.net.curr_timestamp)
         self.steps_taken += 1
         sender_obs = self.get_sender_obs()
-        breakpoint()
         terminated = self.current_trace.is_terminated(self.net.get_curr_time())
         truncated = self.observation_space.contains(sender_obs)
         self.reward_sum += reward
-
+        # print(sender_obs[:3],reward)
         return sender_obs, reward, terminated, truncated, {}
     

@@ -1,3 +1,5 @@
+from . import util
+
 BYTES_PER_PACKET = 1500
 BITS_PER_BYTE = 8
 
@@ -17,3 +19,5 @@ REWARD_SCALE = 0.001
 START_SENDING_RATE = 100
 
 AURORA_ROUND = 0
+
+

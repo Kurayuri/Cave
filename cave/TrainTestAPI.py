@@ -14,6 +14,7 @@ from stable_baselines3.common.noise import NormalActionNoise
 import torch
 from collections import OrderedDict
 from .Environment import Environment
+from . import KEYWORD
 from typing import Union
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
@@ -21,6 +22,7 @@ warnings.filterwarnings("ignore")
 
 class TrainTestAPI:
     ALGOS = {
+            "A2C":stable_baselines3.A2C,
             "DDPG": stable_baselines3.DDPG,
             "DQN": stable_baselines3.DQN,
             "PPO": stable_baselines3.PPO,
@@ -29,6 +31,7 @@ class TrainTestAPI:
     }
     def __init__(self,
         env_name: str = None,
+        env_config:str = None,
         algo: str = None,
         algo_kwargs: dict = {},
         model_filename: str = None,
@@ -38,7 +41,7 @@ class TrainTestAPI:
         reward_api: Union[callable, str] = None,
         test_log_filename: str = "test.log",
         total_cycle: int = 100,
-        mode: str = "train",
+        mode: str = KEYWORD.TRAIN,
     ):
         # Init ALGO
 
@@ -61,20 +64,22 @@ class TrainTestAPI:
             next_model_path = None
 
         # %% Train
-        if mode == "train":
+        if mode == KEYWORD.TRAIN:
+            os.makedirs(next_model_dirpath,exist_ok=True)
             if reward_api:
                 reward_api = os.path.join(next_model_dirpath, reward_api)
             else:
                 reward_api = None
 
-            env = Environment(env_name, reward_api, log_dirpath=next_model_dirpath)
+            env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
 
             if curr_model_path is not None:
-                model = ALGO.load(curr_model_path, env=env, **algo_kwargs)
+                model = ALGO.load(curr_model_path, env=env, tensorboard_log=next_model_dirpath,**algo_kwargs)
             else:
-                model = ALGO(env=env, verbose=0, **algo_kwargs)
+                model = ALGO(env=env, verbose=0,tensorboard_log=next_model_dirpath, **algo_kwargs)
 
             model.learn(total_timesteps=total_cycle)
+            env.reset()
 
             model.save(next_model_path)
 
@@ -99,7 +104,7 @@ class TrainTestAPI:
             else:
                 reward_api = None
 
-            env = Environment(env_name, reward_api)
+            env = Environment(env_name, env_config,reward_api)
 
             model = ALGO.load(curr_model_path, env=env, **algo_kwargs)
 
@@ -112,18 +117,18 @@ class TrainTestAPI:
                 json.dump({"mean_reward": mean_reward, "std_reward": std_reward}, f)
 
     def extract_onnxable_model(self,model):
-            onnxable_model = None
-            if isinstance(model, stable_baselines3.DDPG):
-                onnxable_model = model.policy.actor.mu
-            elif isinstance(model, stable_baselines3.DQN):
-                onnxable_model = model.policy.q_net.q_net
-            elif isinstance(model, stable_baselines3.PPO):
-                onnxable_model = model.policy.mlp_extractor.policy_net
-            elif isinstance(model, stable_baselines3.SAC):
-                onnxable_model = model.policy.actor.latent_pi
-            elif isinstance(model, stable_baselines3.TD3):
-                onnxable_model = model.policy.actor.mu
-            return onnxable_model
+        onnxable_model = None
+        if isinstance(model, stable_baselines3.DDPG):
+            onnxable_model = model.policy.actor.mu
+        elif isinstance(model, stable_baselines3.DQN):
+            onnxable_model = model.policy.q_net.q_net
+        elif isinstance(model, stable_baselines3.PPO):
+            onnxable_model = model.policy.mlp_extractor.policy_net
+        elif isinstance(model, stable_baselines3.SAC):
+            onnxable_model = model.policy.actor.latent_pi
+        elif isinstance(model, stable_baselines3.TD3):
+            onnxable_model = model.policy.actor.mu
+        return onnxable_model
 # %%
 
 
@@ -131,10 +136,11 @@ def parse_args():
     """Parse arguments from the command line."""
     parser = argparse.ArgumentParser("API for training and testing.")
 
-    parser.add_argument("--curr_model_dirpath",
-                        type=str,
-                        default=None,
-                        help="Path of the direcotry where exists a pretrained model.")
+    parser.add_argument(
+        "--curr_model_dirpath",
+        type=str,
+        default=None,
+        help="Path of the direcotry where exists a pretrained model.")
     parser.add_argument('--next_model_dirpath',
                         type=str,
                         default=None,
@@ -155,6 +161,7 @@ def parse_args():
                         type=int,
                         default=100,
                         help="Total number of cycles to be trained.")
+
     parser.add_argument('--mode',
                         type=str,
                         default="train",

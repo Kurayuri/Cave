@@ -107,3 +107,6 @@ def load_bo_json_log(file: str):
             line.strip()
             logs.append(json.loads(line))
     return logs
+
+def join_keywords(args:list):
+    return "_".join(args)

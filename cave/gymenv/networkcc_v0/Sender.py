@@ -107,8 +107,8 @@ class Sender():
         self.bin_size = 500  # ms
 
         self.act_func = {
-            self.ACTION_CWND_DELTA: self.apply_rate_delta,
-            self.ACTION_RATE_DELTA: self.apply_cwnd_delta
+            self.ACTION_RATE_DELTA: self.apply_rate_delta,
+            self.ACTION_CWND_DELTA: self.apply_cwnd_delta
         }
     _next_id = 1
 
@@ -173,7 +173,7 @@ class Sender():
     def apply_rate_delta(self, delta):
         # if self.got_data:
         delta *= self.delta_scale
-        #print("Applying delta %f" % delta)
+        # print("Applying delta %f" % delta)
         if delta >= 0.0:
             self.set_rate(self.rate * (1.0 + delta))
         else:

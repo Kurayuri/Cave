@@ -30,8 +30,8 @@ LOSS_PENALTY = 1.0
 USE_LATENCY_NOISE = True
 MAX_LATENCY_NOISE = 1.1
 
-DEBUG = False
 DEBUG = True
+DEBUG = False
 
 
 def debug_print(msg):

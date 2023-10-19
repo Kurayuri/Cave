@@ -1,17 +1,17 @@
 import os
 import random
+from typing import Any
 import numpy as np
 import gymnasium as gym
-from .gymenv import NetworkCCEnv
-from .gymenv.networkcc_v0.Trace import generate_trace_fn
+from .gymenv import ENVS
+from .gymenv.networkcc_v0 import Trace
+
 
 
 class Environment(gym.Wrapper):
-    def __init__(self, env_name, reward_api: str = "", log_dirpath: str = ""):
+    def __init__(self, env_name, env_config, reward_api: str = "", log_dirpath: str = ""):
         # env = gym.make(env_name, render_mode="rgb_array")
-        dummy_trace = generate_trace_fn(
-            (10, 10), (2, 2), (2, 2), (50, 50), (0, 0), (1, 1), (0, 0), (0, 0))
-        env = NetworkCCEnv(traces=[dummy_trace])
+        env = ENVS[env_name](env_config=env_config)
 
         super().__init__(env)
 
@@ -77,3 +77,7 @@ class Environment(gym.Wrapper):
     def log(self, *args, logger):
         if logger:
             logger.write(" ".join(map(str, args)) + "\n")
+    
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[Any, dict[str, Any]]:
+        
+        return super().reset(seed=seed, options=options)
