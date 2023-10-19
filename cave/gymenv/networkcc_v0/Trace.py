@@ -348,7 +348,7 @@ def generate_trace(ts_duration_range: Tuple[float, float],
         ts_interval: time interval in seconds
     """
     if seed:
-        set_seed(seed)
+        util.lib.seed(seed)
     assert len(ts_duration_range) == 2 and \
         ts_duration_range[0] <= ts_duration_range[1] and ts_duration_range[0] > 0
     assert len(bandwidth_low_range) == 2 and \
@@ -387,6 +387,7 @@ def generate_trace(ts_duration_range: Tuple[float, float],
     # np.max(bandwidths) / BYTES_PER_PACKET / BITS_PER_BYTE * 1e6 每秒包的数量
     # bps: 来回链路中包的数量
     queue_size = max(2, int(bdp * queue_size))
+    queue_size = 1 + int(np.exp(random.uniform(queue_size_range[0], queue_size_range[1])))
 
     ret_trace = Trace(timestamps, bandwidths, delays, loss_rate, queue_size,
                       delay_noise, ts_interval_bandwidth_change)
@@ -480,11 +481,11 @@ def generate_trace_from_config(config: str, duration: int = 30) -> Trace:
 
     # used by bandwidth generation
     delay_noise_min, delay_noise_max = env_config.get(
-        KEYWORD.NOISE_LATENCY, (DEFAULT.NOISE_LATENCY, DEFAULT.NOISE_LATENCY))
+                                                        KEYWORD.NOISE_LATENCY, (DEFAULT.NOISE_LATENCY, DEFAULT.NOISE_LATENCY))
     ts_interval_bandwith_change_min, ts_interval_bandwith_change_max = env_config.get(
-        KEYWORD.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
-        (DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
-         DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE))
+                                                                                        KEYWORD.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
+                                                                                        (DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
+                                                                                        DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE))
 
     return generate_trace(
         (ts_duration_min, ts_duration_max),

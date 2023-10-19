@@ -1,11 +1,3 @@
-# import gymnasium as gym
-# import sys
-# import os
-# sys.path.append(os.path.dirname(__file__))
+import gymnasium as gym
 
-# gym.register(id='NetworkCC-v0', entry_point='networkcc_v0.env:NetworkCCEnv')
-
-from .networkcc_v0.Env import NetworkCCEnv
-ENVS = {
-    "NetworkCC-v0": NetworkCCEnv
-}
+gym.register(id='NetworkCC-v0', entry_point='cave.gymenv.networkcc_v0.Env:NetworkCCEnv')

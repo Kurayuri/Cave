@@ -3,15 +3,12 @@ import random
 from typing import Any
 import numpy as np
 import gymnasium as gym
-from .gymenv import ENVS
-from .gymenv.networkcc_v0 import Trace
 
 
 
 class Environment(gym.Wrapper):
-    def __init__(self, env_name, env_config, reward_api: str = "", log_dirpath: str = ""):
-        # env = gym.make(env_name, render_mode="rgb_array")
-        env = ENVS[env_name](env_config=env_config)
+    def __init__(self, env_id, env_kwargs, reward_api: str = "", log_dirpath: str = ""):
+        env = gym.make(env_id, **env_kwargs)
 
         super().__init__(env)
 
@@ -73,6 +70,7 @@ class Environment(gym.Wrapper):
         if terminated or truncated:
             self.counter_episode += 1
             self.log(f"Steps: {self.counter_step_per_episode} Total Episodes: {self.counter_episode}", logger=self.logger_episode)
+        print(reward)
         return obs, reward, terminated, truncated, info
 
     def log(self, *args, logger):

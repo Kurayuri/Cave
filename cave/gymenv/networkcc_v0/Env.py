@@ -15,6 +15,7 @@ import sys
 import time
 import warnings
 
+MAX_STEP = 400
 
 class NetworkCCEnv(gym.Env):
 
@@ -128,6 +129,7 @@ class NetworkCCEnv(gym.Env):
               self.steps_taken)
         self.reward_sum = 0.0
         self.steps_taken = 0
+        # print(self.current_trace)
         return self.get_sender_obs(), {}
 
     def get_sender_obs(self):
@@ -144,4 +146,4 @@ class NetworkCCEnv(gym.Env):
         truncated = self.observation_space.contains(sender_obs)
         self.reward_sum += reward
         # print(sender_obs[:3],reward)
-        return sender_obs, reward, terminated, truncated, {}
+        return sender_obs, reward, terminated or self.steps_taken >= MAX_STEP, truncated, {}

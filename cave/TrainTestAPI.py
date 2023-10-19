@@ -32,8 +32,8 @@ class TrainTestAPI:
     }
 
     def __init__(self,
-                 env_name: str = None,
-                 env_config: str = None,
+                 env_id: str = None,
+                 env_kwargs: dict = {}, 
                  algo: str = None,
                  algo_kwargs: dict = {},
                  model_filename: str = None,
@@ -70,23 +70,24 @@ class TrainTestAPI:
         # %% Train
         if mode == KEYWORD.TRAIN:
             os.makedirs(next_model_dirpath, exist_ok=True)
+            
             if reward_api:
-                reward_api = os.path.join(next_model_dirpath, reward_api)
-            else:
-                reward_api = None
+                if isinstance(reward_api, str):
+                    reward_api_path = os.path.join(next_model_dirpath, reward_api)
+                    if os.path.exists(reward_api_path):
+                        reward_api = reward_api_path
 
-            def make_env(env_name: str, rank: int):
+            def make_env(env_id: str, rank: int):
 
                 def _init():
-                    env = Environment(env_name, env_config, None,
+                    env = Environment(env_id, env_kwargs, None,
                                       log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
                     return env
 
                 return _init
 
             # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
-
-            env = SubprocVecEnv([make_env(env_name, rank) for rank in range(nproc)],
+            env = SubprocVecEnv([make_env(env_id, rank) for rank in range(nproc)],
                                 start_method='fork')
 
             if curr_model_path is not None:
@@ -120,7 +121,7 @@ class TrainTestAPI:
             else:
                 reward_api = None
 
-            env = Environment(env_name, env_config, reward_api)
+            env = Environment(env_id, env_config, reward_api)
 
             model = ALGO.load(curr_model_path, env=env, **algo_kwargs)
 
@@ -221,7 +222,7 @@ if __name__ == '__main__':
     ])
     algo_kwargs = {'policy': 'MlpPolicy'}
 
-    TrainTestAPI(env_name=env_name,
+    TrainTestAPI(env_id=env_name,
                  algo=algo,
                  algo_kwargs=algo_kwargs,
                  model_filename=model_filename,
