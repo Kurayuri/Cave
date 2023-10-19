@@ -13,7 +13,7 @@ from stable_baselines3.common.noise import NormalActionNoise
 
 import torch
 from collections import OrderedDict
-from .Environment import Environment
+from .Environment import Environment,CallBack
 from . import KEYWORD
 from typing import Union
 
@@ -70,7 +70,7 @@ class TrainTestAPI:
         # %% Train
         if mode == KEYWORD.TRAIN:
             os.makedirs(next_model_dirpath, exist_ok=True)
-            
+
             if reward_api:
                 if isinstance(reward_api, str):
                     reward_api_path = os.path.join(next_model_dirpath, reward_api)
@@ -78,13 +78,8 @@ class TrainTestAPI:
                         reward_api = reward_api_path
 
             def make_env(env_id: str, rank: int):
-
-                def _init():
-                    env = Environment(env_id, env_kwargs, None,
+                return lambda :Environment(env_id, env_kwargs, None,
                                       log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
-                    return env
-
-                return _init
 
             # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
             env = SubprocVecEnv([make_env(env_id, rank) for rank in range(nproc)],
@@ -95,7 +90,7 @@ class TrainTestAPI:
             else:
                 model = ALGO(env=env, verbose=0, tensorboard_log=next_model_dirpath, **algo_kwargs)
 
-            model.learn(total_timesteps=total_cycle)
+            model.learn(total_timesteps=total_cycle, callback=CallBack())
             env.reset()
 
             model.save(next_model_path)

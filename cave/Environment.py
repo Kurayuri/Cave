@@ -3,10 +3,14 @@ import random
 from typing import Any
 import numpy as np
 import gymnasium as gym
-
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 
 
 class Environment(gym.Wrapper):
+    ATTR_REWARD_API = "reward_api"
+    ATTR_TRACEBACKS = "tracebacks"
+
     def __init__(self, env_id, env_kwargs, reward_api: str = "", log_dirpath: str = ""):
         env = gym.make(env_id, **env_kwargs)
 
@@ -30,6 +34,10 @@ class Environment(gym.Wrapper):
                 except BaseException:
                     print("Invalid reward_api!")
 
+        # Traceback
+        self.tracebacks = []
+
+        # logger
         self.logger_all = None
         self.logger_occurred = None
         self.logger_violated = None
@@ -54,6 +62,8 @@ class Environment(gym.Wrapper):
         if violated:
             self.log(obs, action, reward, _reward_, logger=self.logger_violated)
 
+        self.tracebacks.append(_reward_ - reward)
+
         return _reward_
 
     def step(self, action):
@@ -70,13 +80,37 @@ class Environment(gym.Wrapper):
         if terminated or truncated:
             self.counter_episode += 1
             self.log(f"Steps: {self.counter_step_per_episode} Total Episodes: {self.counter_episode}", logger=self.logger_episode)
-        print(reward)
         return obs, reward, terminated, truncated, info
 
     def log(self, *args, logger):
         if logger:
             logger.write(" ".join(map(str, args)) + "\n")
-    
+
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[Any, dict[str, Any]]:
-        
+        self.counter_step_per_episode = 0
         return super().reset(seed=seed, options=options)
+
+
+class CallBack(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.trace_gamma = 0.5
+        self.trace_depth = 5
+
+    def _init_callback(self):
+        self.buffer = self.model.rollout_buffer if isinstance(
+            self.model, OnPolicyAlgorithm) else self.model.replay_buffer
+        self.trace_enabled = self.training_env.get_attr(Environment.ATTR_REWARD_API)[0] is not None
+
+    def _on_rollout_end(self):
+        if self.trace_enabled:
+            tracebacks = np.array(self.training_env.get_attr(Environment.ATTR_TRACEBACKS)).T
+            self.training_env.set_attr(Environment.ATTR_TRACEBACKS, [])
+
+            num_rows = self.buffer.rewards.shape[0]
+            for i in range(num_rows - 2, -1, -1):
+                tracebacks[i] += tracebacks[i + 1] * self.trace_gamma
+            self.buffer.rewards += tracebacks
+
+    def _on_step(self):
+        return True
