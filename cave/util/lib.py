@@ -42,7 +42,7 @@ def natural_sort(l):
     return sorted(l, key=alphanum_key)
 
 
-def set_seed(seed):
+def seed(seed):
     random.seed(seed)
     np.random.seed(seed)
 

@@ -38,6 +38,7 @@ class Environment(gym.Wrapper):
         self.logger_violated = None
         self.logger_episode = None
         if self.log_dirpath:
+            os.makedirs(self.log_dirpath, exist_ok=True)
             self.logger_all = open(os.path.join(log_dirpath, "all.log"), "w")
             self.logger_occurred = open(os.path.join(log_dirpath, "occurred.log"), "w")
             self.logger_violated = open(os.path.join(log_dirpath, "violated.log"), "w")

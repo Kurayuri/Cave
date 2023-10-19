@@ -20,36 +20,40 @@ from typing import Union
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
 warnings.filterwarnings("ignore")
 
+
 class TrainTestAPI:
     ALGOS = {
-            "A2C":stable_baselines3.A2C,
-            "DDPG": stable_baselines3.DDPG,
-            "DQN": stable_baselines3.DQN,
-            "PPO": stable_baselines3.PPO,
-            "SAC": stable_baselines3.SAC,
-            "TD3": stable_baselines3.TD3
+        "A2C": stable_baselines3.A2C,
+        "DDPG": stable_baselines3.DDPG,
+        "DQN": stable_baselines3.DQN,
+        "PPO": stable_baselines3.PPO,
+        "SAC": stable_baselines3.SAC,
+        "TD3": stable_baselines3.TD3
     }
+
     def __init__(self,
-        env_name: str = None,
-        env_config:str = None,
-        algo: str = None,
-        algo_kwargs: dict = {},
-        model_filename: str = None,
-        curr_model_dirpath: str = None,
-        next_model_dirpath: str = None,
-        onnx_filename: str = "model.onnx",
-        reward_api: Union[callable, str] = None,
-        test_log_filename: str = "test.log",
-        total_cycle: int = 100,
-        mode: str = KEYWORD.TRAIN,
-    ):
+                 env_name: str = None,
+                 env_config: str = None,
+                 algo: str = None,
+                 algo_kwargs: dict = {},
+                 model_filename: str = None,
+                 curr_model_dirpath: str = None,
+                 next_model_dirpath: str = None,
+                 onnx_filename: str = "model.onnx",
+                 reward_api: Union[callable, str] = None,
+                 test_log_filename: str = "test.log",
+                 total_cycle: int = 100,
+                 mode: str = KEYWORD.TRAIN,
+                 nproc: int = 1):
         # Init ALGO
 
         ALGO = self.ALGOS[algo]
 
         # Initialize path
         if curr_model_dirpath is None and next_model_dirpath is None:
-            raise IOError('At least one of <curr_model_dirpath> and <next_model_dirpath> is required.')
+            raise IOError(
+                'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
+            )
 
         if curr_model_dirpath is not None:
             curr_model_path = os.path.join(curr_model_dirpath, model_filename)
@@ -65,18 +69,30 @@ class TrainTestAPI:
 
         # %% Train
         if mode == KEYWORD.TRAIN:
-            os.makedirs(next_model_dirpath,exist_ok=True)
+            os.makedirs(next_model_dirpath, exist_ok=True)
             if reward_api:
                 reward_api = os.path.join(next_model_dirpath, reward_api)
             else:
                 reward_api = None
 
-            env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
+            def make_env(env_name: str, rank: int):
+
+                def _init():
+                    env = Environment(env_name, env_config, None,
+                                      log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
+                    return env
+
+                return _init
+
+            # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
+
+            env = SubprocVecEnv([make_env(env_name, rank) for rank in range(nproc)],
+                                start_method='fork')
 
             if curr_model_path is not None:
-                model = ALGO.load(curr_model_path, env=env, tensorboard_log=next_model_dirpath,**algo_kwargs)
+                model = ALGO.load(curr_model_path, env=env, tensorboard_log=next_model_dirpath, **algo_kwargs)
             else:
-                model = ALGO(env=env, verbose=0,tensorboard_log=next_model_dirpath, **algo_kwargs)
+                model = ALGO(env=env, verbose=0, tensorboard_log=next_model_dirpath, **algo_kwargs)
 
             model.learn(total_timesteps=total_cycle)
             env.reset()
@@ -104,19 +120,24 @@ class TrainTestAPI:
             else:
                 reward_api = None
 
-            env = Environment(env_name, env_config,reward_api)
+            env = Environment(env_name, env_config, reward_api)
 
             model = ALGO.load(curr_model_path, env=env, **algo_kwargs)
 
             mean_reward, std_reward = evaluate_policy(model,
-                                                    env,
-                                                    n_eval_episodes=100)
+                                                      env,
+                                                      n_eval_episodes=100)
             print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
 
-            with open(os.path.join(curr_model_dirpath, test_log_filename), 'w') as f:
-                json.dump({"mean_reward": mean_reward, "std_reward": std_reward}, f)
+            with open(os.path.join(curr_model_dirpath, test_log_filename),
+                      'w') as f:
+                json.dump(
+                    {
+                        "mean_reward": mean_reward,
+                        "std_reward": std_reward
+                    }, f)
 
-    def extract_onnxable_model(self,model):
+    def extract_onnxable_model(self, model):
         onnxable_model = None
         if isinstance(model, stable_baselines3.DDPG):
             onnxable_model = model.policy.actor.mu
@@ -167,6 +188,11 @@ def parse_args():
                         default="train",
                         help='Mode in train or test.')
 
+    parser.add_argument('--nproc',
+                        type=int,
+                        default=1,
+                        help='Number of processes.')
+
     return parser.parse_args()
 
 
@@ -175,36 +201,35 @@ if __name__ == '__main__':
 
     model_filename = "Aurora"
     env_name = "NetworkCC-v0"
-    algo="PPO"
+    algo = "PPO"
 
-    algo_kwargs = OrderedDict(
-        [('buffer_size', 200000),
-         ('gamma', 0.98),
-         ('gradient_steps', -1),
-         ('learning_rate', 0.001),
-         ('learning_starts', 10000),
-         #  ('n_timesteps', 20000),
-         #  ('noise_std', 0.1),
-         #  ('noise_type', 'normal'),
-         ('action_noise', NormalActionNoise(np.zeros(1), np.ones(1) * 0.1)),
-         ('policy', 'MlpPolicy'),
-         #  ('policy_kwargs', 'dict(net_arch=[400, 300])'),
-         ('policy_kwargs', dict(net_arch=[400, 300], n_critics=1)),
-         ('train_freq', 1)
-         #  ('normalize', False)
-         ])
-    algo_kwargs={'policy': 'MlpPolicy'}
+    algo_kwargs = OrderedDict([
+        ('buffer_size', 200000),
+        ('gamma', 0.98),
+        ('gradient_steps', -1),
+        ('learning_rate', 0.001),
+        ('learning_starts', 10000),
+        #  ('n_timesteps', 20000),
+        #  ('noise_std', 0.1),
+        #  ('noise_type', 'normal'),
+        ('action_noise', NormalActionNoise(np.zeros(1), np.ones(1) * 0.1)),
+        ('policy', 'MlpPolicy'),
+        #  ('policy_kwargs', 'dict(net_arch=[400, 300])'),
+        ('policy_kwargs', dict(net_arch=[400, 300], n_critics=1)),
+        ('train_freq', 1)
+        #  ('normalize', False)
+    ])
+    algo_kwargs = {'policy': 'MlpPolicy'}
 
-    TrainTestAPI(
-        env_name=env_name,
-        algo=algo,
-        algo_kwargs=algo_kwargs,
-        model_filename=model_filename,
-        curr_model_dirpath=args.curr_model_dirpath,
-        next_model_dirpath=args.next_model_dirpath,
-        onnx_filename=args.onnx_filename,
-        reward_api=args.reward_api,
-        test_log_filename=args.test_log_filename,
-        total_cycle=args.total_cycle,
-        mode=args.mode
-    )
+    TrainTestAPI(env_name=env_name,
+                 algo=algo,
+                 algo_kwargs=algo_kwargs,
+                 model_filename=model_filename,
+                 curr_model_dirpath=args.curr_model_dirpath,
+                 next_model_dirpath=args.next_model_dirpath,
+                 onnx_filename=args.onnx_filename,
+                 reward_api=args.reward_api,
+                 test_log_filename=args.test_log_filename,
+                 total_cycle=args.total_cycle,
+                 mode=args.mode
+                 )
