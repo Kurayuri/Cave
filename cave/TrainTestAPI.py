@@ -13,7 +13,7 @@ from stable_baselines3.common.noise import NormalActionNoise
 
 import torch
 from collections import OrderedDict
-from .Environment import Environment,CallBack
+from .Environment import Environment, CallBack
 from . import KEYWORD
 from typing import Union
 
@@ -33,12 +33,12 @@ class TrainTestAPI:
 
     def __init__(self,
                  env_id: str = None,
-                 env_kwargs: dict = {}, 
+                 env_kwargs: dict = {},
                  algo: str = None,
                  algo_kwargs: dict = {},
-                 model_filename: str = None,
                  curr_model_dirpath: str = None,
                  next_model_dirpath: str = None,
+                 model_filename: str = None,
                  onnx_filename: str = "model.onnx",
                  reward_api: Union[callable, str] = None,
                  test_log_filename: str = "test.log",
@@ -78,8 +78,8 @@ class TrainTestAPI:
                         reward_api = reward_api_path
 
             def make_env(env_id: str, rank: int):
-                return lambda :Environment(env_id, env_kwargs, None,
-                                      log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
+                return lambda: Environment(env_id, env_kwargs, None,
+                                           log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
 
             # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
             env = SubprocVecEnv([make_env(env_id, rank) for rank in range(nproc)],
@@ -90,7 +90,7 @@ class TrainTestAPI:
             else:
                 model = ALGO(env=env, verbose=0, tensorboard_log=next_model_dirpath, **algo_kwargs)
 
-            model.learn(total_timesteps=total_cycle, callback=CallBack())
+            model.learn(total_timesteps=total_cycle, callback=CallBack(),progress_bar=True)
             env.reset()
 
             model.save(next_model_path)
@@ -152,20 +152,38 @@ class TrainTestAPI:
 def parse_args():
     """Parse arguments from the command line."""
     parser = argparse.ArgumentParser("API for training and testing.")
-
-    parser.add_argument(
-        "--curr_model_dirpath",
-        type=str,
-        default=None,
-        help="Path of the direcotry where exists a pretrained model.")
+    parser.add_argument("--env_id",
+                        type=str,
+                        required=True,
+                        help="ID of gym env.")
+    parser.add_argument("--env_kwargs",
+                        type=dict,
+                        default={},
+                        help="Kwargs of gym env.")
+    parser.add_argument("--algo",
+                        type=str,
+                        required=True,
+                        help="Agorithm.")
+    parser.add_argument("--algo_kwargs",
+                        type=dict,
+                        default={},
+                        help="Kwargs of algorith,.")
+    parser.add_argument("--curr_model_dirpath",
+                        type=str,
+                        default=None,
+                        help="Path of the direcotry where exists a pretrained model.")
     parser.add_argument('--next_model_dirpath',
                         type=str,
                         default=None,
                         help="Path of the direcotry to save the model.")
+    parser.add_argument('--model_filename',
+                        type=str,
+                        default="Model",
+                        help='Filename of the model.')
     parser.add_argument('--onnx_filename',
                         type=str,
                         default="model.onnx",
-                        help='Filename of the model')
+                        help='Filename of the onnx model.')
     parser.add_argument('--reward_api',
                         type=str,
                         default=None,
@@ -178,12 +196,10 @@ def parse_args():
                         type=int,
                         default=100,
                         help="Total number of cycles to be trained.")
-
     parser.add_argument('--mode',
                         type=str,
                         default="train",
                         help='Mode in train or test.')
-
     parser.add_argument('--nproc',
                         type=int,
                         default=1,
@@ -195,8 +211,8 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    model_filename = "Aurora"
-    env_name = "NetworkCC-v0"
+    model_filename = "CartPole"
+    env_id = "CatePole-v1"
     algo = "PPO"
 
     algo_kwargs = OrderedDict([
@@ -205,27 +221,24 @@ if __name__ == '__main__':
         ('gradient_steps', -1),
         ('learning_rate', 0.001),
         ('learning_starts', 10000),
-        #  ('n_timesteps', 20000),
-        #  ('noise_std', 0.1),
-        #  ('noise_type', 'normal'),
         ('action_noise', NormalActionNoise(np.zeros(1), np.ones(1) * 0.1)),
         ('policy', 'MlpPolicy'),
-        #  ('policy_kwargs', 'dict(net_arch=[400, 300])'),
         ('policy_kwargs', dict(net_arch=[400, 300], n_critics=1)),
         ('train_freq', 1)
-        #  ('normalize', False)
     ])
-    algo_kwargs = {'policy': 'MlpPolicy'}
+    env_kwargs = {}
 
-    TrainTestAPI(env_id=env_name,
+    TrainTestAPI(env_id=env_id,
+                 env_kwargs=env_kwargs,
                  algo=algo,
                  algo_kwargs=algo_kwargs,
-                 model_filename=model_filename,
                  curr_model_dirpath=args.curr_model_dirpath,
                  next_model_dirpath=args.next_model_dirpath,
+                 model_filename=model_filename,
                  onnx_filename=args.onnx_filename,
                  reward_api=args.reward_api,
                  test_log_filename=args.test_log_filename,
                  total_cycle=args.total_cycle,
-                 mode=args.mode
+                 mode=args.mode,
+                 nproc=args.nproc
                  )
