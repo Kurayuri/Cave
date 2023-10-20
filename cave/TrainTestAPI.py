@@ -17,8 +17,12 @@ import os
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
 warnings.filterwarnings("ignore")
 
+
 def maker_TrainTestAPI(**kwargs):
-    return lambda **kargs:TrainTestAPI(**kargs,**kwargs)
+    def func(**kargs):
+        api=TrainTestAPI(**kargs, **kwargs)
+        return api.ans
+    return func
 
 class TrainTestAPI:
     ALGOS = {
@@ -28,8 +32,7 @@ class TrainTestAPI:
         "PPO": stable_baselines3.PPO,
         "SAC": stable_baselines3.SAC,
         "TD3": stable_baselines3.TD3
-    }
-
+    }      
 
     def __init__(self,
                  env_id: str = None,
@@ -43,77 +46,84 @@ class TrainTestAPI:
                  reward_api: Union[callable, str] = None,
                  test_log_filename: str = "test.log",
                  total_cycle: int = 100,
-                 mode: str = KEYWORD.TRAIN,
+                 mode: str = None,
                  nproc: int = 1):
         # Init ALGO
-
 
         # Initialize path
         if curr_model_dirpath is None and next_model_dirpath is None:
             raise IOError(
                 'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
             )
-        
-        self.env_id=env_id
-        self.env_kwargs=env_kwargs
-        self.algo_kwargs=algo_kwargs
-        self.curr_model_dirpath=curr_model_dirpath
-        self.next_model_dirpath=next_model_dirpath
-        self.model_filename=model_filename
-        self.onnx_filename=onnx_filename
-        self.reward_api=reward_api
-        self.test_log_filename=test_log_filename
-        self.total_cycle=total_cycle
-        self.mode=mode
-        self.nproc=nproc
-        
+
+        self.env_id = env_id
+        self.env_kwargs = env_kwargs
+        self.algo_kwargs = algo_kwargs
+        self.curr_model_dirpath = curr_model_dirpath
+        self.next_model_dirpath = next_model_dirpath
+        self.model_filename = model_filename
+        self.onnx_filename = onnx_filename
+        self.reward_api = reward_api
+        self.test_log_filename = test_log_filename
+        self.total_cycle = total_cycle
+        self.mode = mode
+        self.nproc = nproc
+
         self.ALGO = self.ALGOS[algo]
 
         self.curr_model_path = os.path.join(curr_model_dirpath, model_filename) if curr_model_dirpath else None
 
-        self.next_model_path, self.next_onnx_path = (os.path.join(next_model_dirpath, onnx_filename),
-                                          os.path.join(next_model_dirpath, model_filename)) if next_model_dirpath else (None,None)
-        
+        self.next_model_path, self.next_onnx_path = (os.path.join(next_model_dirpath, model_filename),
+                                                     os.path.join(next_model_dirpath, onnx_filename)) if next_model_dirpath else (None, None)
+        self.ans = None
         if mode == KEYWORD.TRAIN:
             self.train()
         elif mode == KEYWORD.TEST:
             self.test()
 
-
-    def make_env(self,env_id:str, env_kwargs,**kwargs):
-        return lambda: Environment(env_id, env_kwargs, **kwargs)
-
     def extract_onnxable_model(self, model):
+
+            
         onnxable_model = None
         if isinstance(model, stable_baselines3.DDPG):
             onnxable_model = model.policy.actor.mu
         elif isinstance(model, stable_baselines3.DQN):
             onnxable_model = model.policy.q_net.q_net
         elif isinstance(model, stable_baselines3.PPO):
-            onnxable_model = model.policy.mlp_extractor.policy_net
+            class OnnxablePolicy(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.extractor = model.policy.mlp_extractor
+                    self.action_net = model.policy.action_net
+                    self.value_net =  model.policy.value_net
+
+                def forward(self, observation):
+                    action_hidden, value_hidden = self.extractor(observation)
+                    return self.action_net(action_hidden)
+                
+            onnxable_model = OnnxablePolicy(model)
+            
         elif isinstance(model, stable_baselines3.SAC):
             onnxable_model = model.policy.actor.latent_pi
         elif isinstance(model, stable_baselines3.TD3):
             onnxable_model = model.policy.actor.mu
         return onnxable_model
-    
-    def detect_reward_api(self,reward_api, path:str = ""):
+
+    def detect_reward_api(self, reward_api, path: str = ""):
         if isinstance(reward_api, CallBack):
             return reward_api
         if isinstance(reward_api, str):
             reward_api_path = os.path.join(path, reward_api)
             return reward_api_path if os.path.exists(reward_api_path) else reward_api
 
-
     def train(self):
         os.makedirs(self.next_model_dirpath, exist_ok=True)
-        
+
         self.reward_api = self.detect_reward_api(self.reward_api, self.next_model_dirpath)
 
         # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
-        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath, rank)   
-                                for rank in range(self.nproc)]
-                            ,start_method='fork')
+        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath, rank)
+                             for rank in range(self.nproc)], start_method='fork')
 
         if self.curr_model_path is not None:
             model = self.ALGO.load(self.curr_model_path, env=env, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
@@ -139,28 +149,24 @@ class TrainTestAPI:
         )
 
         print(self.next_onnx_path)
-    
+
     def test(self):
-        self.reward_api = self.detect_reward_api(self.reward_api, self.curr_model_path)
+        self.reward_api = self.detect_reward_api(self.reward_api, self.curr_model_dirpath)
 
         # env = Environment(env_id, env_kwargs, reward_api)
-        env = SubprocVecEnv([maker_Environment(self.env_id,self.env_kwargs,self.reward_api, rank) for rank in range(self.nproc)],
+        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, rank=rank) for rank in range(self.nproc)],
                             start_method='fork')
 
         model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
 
-        mean_reward, std_reward = evaluate_policy(model,
-                                                    env,
-                                                    n_eval_episodes=100)
+        mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
         print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
 
-        with open(os.path.join(self.curr_model_dirpath, self.test_log_filename),
-                    'w') as f:
-            json.dump(
-                {
-                    "mean_reward": mean_reward,
-                    "std_reward": std_reward
-                }, f)
+        result={"mean_reward": mean_reward, "std_reward": std_reward}
+        with open(os.path.join(self.curr_model_dirpath, self.test_log_filename), 'w') as f:
+            json.dump(result, f)
+        self.ans = result
+        return result
 
 
 # %%
@@ -213,7 +219,7 @@ def parse_args():
                         help="Total number of cycles to be trained.")
     parser.add_argument('--mode',
                         type=str,
-                        default="train",
+                        default="",
                         help='Mode in train or test.')
     parser.add_argument('--nproc',
                         type=int,

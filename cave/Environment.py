@@ -52,7 +52,7 @@ class Environment(gym.Wrapper):
         self.logger_occurred = None
         self.logger_violated = None
         self.logger_episode = None
-        print(self.log_dirpath)
+
         if self.log_dirpath:
             os.makedirs(self.log_dirpath, exist_ok=True)
             self.logger_all = open(os.path.join(log_dirpath, "all.log"), "w")
@@ -112,16 +112,15 @@ class CallBack(BaseCallback):
         self.buffer = self.model.rollout_buffer if isinstance(
             self.model, OnPolicyAlgorithm) else self.model.replay_buffer
         self.trace_enabled = self.training_env.get_attr(Environment.ATTR_REWARD_API)[0] is not None
-
+        
     def _on_rollout_end(self):
         if self.trace_enabled:
             tracebacks = np.array(self.training_env.get_attr(Environment.ATTR_TRACEBACKS)).T
             self.training_env.set_attr(Environment.ATTR_TRACEBACKS, [])
-
-            num_rows = self.buffer.rewards.shape[0]
+            num_rows = tracebacks.shape[0]
             for i in range(num_rows - 2, -1, -1):
                 tracebacks[i] += tracebacks[i + 1] * self.trace_gamma
-            self.buffer.rewards += tracebacks
+            self.buffer.rewards[:num_rows] += tracebacks
 
     def _on_step(self):
         return True
