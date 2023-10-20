@@ -5,19 +5,29 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from typing import Union
 
+def maker_Environment(env_id, env_kwargs, 
+                      reward_api: Union[str,callable] = None, 
+                      log_dirpath: str = "", rank: int = None):
+    if rank is not None and log_dirpath:
+        log_dirpath = os.path.join(log_dirpath, "rank_%02d" % rank)
+    return lambda: Environment(env_id, env_kwargs, reward_api, log_dirpath, rank)
 
 class Environment(gym.Wrapper):
     ATTR_REWARD_API = "reward_api"
     ATTR_TRACEBACKS = "tracebacks"
 
-    def __init__(self, env_id, env_kwargs, reward_api: str = "", log_dirpath: str = ""):
+    def __init__(self, env_id, env_kwargs, 
+                 reward_api: Union[str,callable] = None,
+                 log_dirpath: str = "", rank: int=0):
         env = gym.make(env_id, **env_kwargs)
 
         super().__init__(env)
 
         # TODO
         self.reward_api = reward_api
+        self.rank = rank
         self.is_violated_func = None
         self.get_reward_func = None
         self.log_dirpath = log_dirpath
@@ -42,6 +52,7 @@ class Environment(gym.Wrapper):
         self.logger_occurred = None
         self.logger_violated = None
         self.logger_episode = None
+        print(self.log_dirpath)
         if self.log_dirpath:
             os.makedirs(self.log_dirpath, exist_ok=True)
             self.logger_all = open(os.path.join(log_dirpath, "all.log"), "w")
@@ -86,7 +97,7 @@ class Environment(gym.Wrapper):
         if logger:
             logger.write(" ".join(map(str, args)) + "\n")
 
-    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[Any, dict[str, Any]]:
+    def reset(self, *, seed = None, options = {}):
         self.counter_step_per_episode = 0
         return super().reset(seed=seed, options=options)
 

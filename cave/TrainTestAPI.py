@@ -1,25 +1,24 @@
-import warnings
-import time
-import argparse
-import os
-import json
-import numpy as np
-import stable_baselines3
-from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.utils import set_random_seed
+from .Environment import Environment, CallBack, maker_Environment
+from .import KEYWORD
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.noise import NormalActionNoise
-
-import torch
 from collections import OrderedDict
-from .Environment import Environment, CallBack
-from . import KEYWORD
 from typing import Union
+import stable_baselines3
+import numpy as np
+import argparse
+import warnings
+import torch
+import json
+import os
+
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
 warnings.filterwarnings("ignore")
 
+def maker_TrainTestAPI(**kwargs):
+    return lambda **kargs:TrainTestAPI(**kargs,**kwargs)
 
 class TrainTestAPI:
     ALGOS = {
@@ -30,6 +29,7 @@ class TrainTestAPI:
         "SAC": stable_baselines3.SAC,
         "TD3": stable_baselines3.TD3
     }
+
 
     def __init__(self,
                  env_id: str = None,
@@ -47,91 +47,41 @@ class TrainTestAPI:
                  nproc: int = 1):
         # Init ALGO
 
-        ALGO = self.ALGOS[algo]
 
         # Initialize path
         if curr_model_dirpath is None and next_model_dirpath is None:
             raise IOError(
                 'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
             )
+        
+        self.env_id=env_id
+        self.env_kwargs=env_kwargs
+        self.algo_kwargs=algo_kwargs
+        self.curr_model_dirpath=curr_model_dirpath
+        self.next_model_dirpath=next_model_dirpath
+        self.model_filename=model_filename
+        self.onnx_filename=onnx_filename
+        self.reward_api=reward_api
+        self.test_log_filename=test_log_filename
+        self.total_cycle=total_cycle
+        self.mode=mode
+        self.nproc=nproc
+        
+        self.ALGO = self.ALGOS[algo]
 
-        if curr_model_dirpath is not None:
-            curr_model_path = os.path.join(curr_model_dirpath, model_filename)
-        else:
-            curr_model_path = None
+        self.curr_model_path = os.path.join(curr_model_dirpath, model_filename) if curr_model_dirpath else None
 
-        if next_model_dirpath is not None:
-            next_onnx_path = os.path.join(next_model_dirpath, onnx_filename)
-            next_model_path = os.path.join(next_model_dirpath, model_filename)
-        else:
-            next_onnx_path = None
-            next_model_path = None
-
-        # %% Train
+        self.next_model_path, self.next_onnx_path = (os.path.join(next_model_dirpath, onnx_filename),
+                                          os.path.join(next_model_dirpath, model_filename)) if next_model_dirpath else (None,None)
+        
         if mode == KEYWORD.TRAIN:
-            os.makedirs(next_model_dirpath, exist_ok=True)
+            self.train()
+        elif mode == KEYWORD.TEST:
+            self.test()
 
-            if reward_api:
-                if isinstance(reward_api, str):
-                    reward_api_path = os.path.join(next_model_dirpath, reward_api)
-                    if os.path.exists(reward_api_path):
-                        reward_api = reward_api_path
 
-            def make_env(env_id: str, rank: int):
-                return lambda: Environment(env_id, env_kwargs, None,
-                                           log_dirpath=os.path.join(next_model_dirpath, "rank_%02d" % rank))
-
-            # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
-            env = SubprocVecEnv([make_env(env_id, rank) for rank in range(nproc)],
-                                start_method='fork')
-
-            if curr_model_path is not None:
-                model = ALGO.load(curr_model_path, env=env, tensorboard_log=next_model_dirpath, **algo_kwargs)
-            else:
-                model = ALGO(env=env, verbose=0, tensorboard_log=next_model_dirpath, **algo_kwargs)
-
-            model.learn(total_timesteps=total_cycle, callback=CallBack(),progress_bar=True)
-            env.reset()
-
-            model.save(next_model_path)
-
-            # Export to ONNX
-            observation_size = model.observation_space.shape
-            dummy_input = torch.randn(1, *observation_size)
-
-            onnxable_model = self.extract_onnxable_model(model)
-            torch.onnx.export(
-                onnxable_model,
-                dummy_input,
-                next_onnx_path,
-                opset_version=9,
-                input_names=["input"],
-            )
-
-            print(next_onnx_path)
-        # %% Test
-        else:
-            if reward_api:
-                reward_api = os.path.join(curr_model_dirpath, reward_api)
-            else:
-                reward_api = None
-
-            env = Environment(env_id, env_config, reward_api)
-
-            model = ALGO.load(curr_model_path, env=env, **algo_kwargs)
-
-            mean_reward, std_reward = evaluate_policy(model,
-                                                      env,
-                                                      n_eval_episodes=100)
-            print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
-
-            with open(os.path.join(curr_model_dirpath, test_log_filename),
-                      'w') as f:
-                json.dump(
-                    {
-                        "mean_reward": mean_reward,
-                        "std_reward": std_reward
-                    }, f)
+    def make_env(self,env_id:str, env_kwargs,**kwargs):
+        return lambda: Environment(env_id, env_kwargs, **kwargs)
 
     def extract_onnxable_model(self, model):
         onnxable_model = None
@@ -146,9 +96,74 @@ class TrainTestAPI:
         elif isinstance(model, stable_baselines3.TD3):
             onnxable_model = model.policy.actor.mu
         return onnxable_model
+    
+    def detect_reward_api(self,reward_api, path:str = ""):
+        if isinstance(reward_api, CallBack):
+            return reward_api
+        if isinstance(reward_api, str):
+            reward_api_path = os.path.join(path, reward_api)
+            return reward_api_path if os.path.exists(reward_api_path) else reward_api
+
+
+    def train(self):
+        os.makedirs(self.next_model_dirpath, exist_ok=True)
+        
+        self.reward_api = self.detect_reward_api(self.reward_api, self.next_model_dirpath)
+
+        # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
+        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath, rank)   
+                                for rank in range(self.nproc)]
+                            ,start_method='fork')
+
+        if self.curr_model_path is not None:
+            model = self.ALGO.load(self.curr_model_path, env=env, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
+        else:
+            model = self.ALGO(env=env, verbose=0, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
+
+        model.learn(total_timesteps=self.total_cycle, callback=CallBack(), progress_bar=True)
+        env.reset()
+
+        model.save(self.next_model_path)
+
+        # Export to ONNX
+        observation_size = model.observation_space.shape
+        dummy_input = torch.randn(1, *observation_size)
+
+        onnxable_model = self.extract_onnxable_model(model)
+        torch.onnx.export(
+            onnxable_model,
+            dummy_input,
+            self.next_onnx_path,
+            opset_version=9,
+            input_names=["input"],
+        )
+
+        print(self.next_onnx_path)
+    
+    def test(self):
+        self.reward_api = self.detect_reward_api(self.reward_api, self.curr_model_path)
+
+        # env = Environment(env_id, env_kwargs, reward_api)
+        env = SubprocVecEnv([maker_Environment(self.env_id,self.env_kwargs,self.reward_api, rank) for rank in range(self.nproc)],
+                            start_method='fork')
+
+        model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
+
+        mean_reward, std_reward = evaluate_policy(model,
+                                                    env,
+                                                    n_eval_episodes=100)
+        print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+
+        with open(os.path.join(self.curr_model_dirpath, self.test_log_filename),
+                    'w') as f:
+            json.dump(
+                {
+                    "mean_reward": mean_reward,
+                    "std_reward": std_reward
+                }, f)
+
+
 # %%
-
-
 def parse_args():
     """Parse arguments from the command line."""
     parser = argparse.ArgumentParser("API for training and testing.")
