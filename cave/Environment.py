@@ -5,22 +5,29 @@ import numpy as np
 import gymnasium as gym
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
-from typing import Union
+from typing import Union, Dict
+from .import util
+from .import CONSTANT
 
-def maker_Environment(env_id, env_kwargs, 
-                      reward_api: Union[str,callable] = None, 
+
+def maker_Environment(env_id, env_kwargs,
+                      reward_api: Union[str, callable] = None,
                       log_dirpath: str = "", rank: int = None):
     if rank is not None and log_dirpath:
         log_dirpath = os.path.join(log_dirpath, "rank_%02d" % rank)
     return lambda: Environment(env_id, env_kwargs, reward_api, log_dirpath, rank)
 
+
 class Environment(gym.Wrapper):
     ATTR_REWARD_API = "reward_api"
     ATTR_TRACEBACKS = "tracebacks"
 
-    def __init__(self, env_id, env_kwargs, 
-                 reward_api: Union[str,callable] = None,
-                 log_dirpath: str = "", rank: int=0):
+    GET_REWARD_FUNC_ID = "get_reward"
+    IS_VIOLATED_FUNC_ID = "is_violated"
+
+    def __init__(self, env_id, env_kwargs,
+                 reward_api: Union[str, Dict[str, callable]] = None,
+                 log_dirpath: str = "", rank: int = 0):
         env = gym.make(env_id, **env_kwargs)
 
         super().__init__(env)
@@ -28,21 +35,32 @@ class Environment(gym.Wrapper):
         # TODO
         self.reward_api = reward_api
         self.rank = rank
-        self.is_violated_func = None
+        # self.is_violated_func = None
         self.get_reward_func = None
         self.log_dirpath = log_dirpath
 
         self.counter_step_per_episode = 0
         self.counter_episode = 0
 
+        # Reward API
         if self.reward_api:
-            if not callable(self.reward_api):
-                try:
-                    exec(open(self.reward_api).read())
-                    self.is_violated_func = locals()["is_violated"]
-                    self.get_reward_func = locals()["get_reward"]
-                except BaseException:
-                    print("Invalid reward_api!")
+            try:
+                if isinstance(self.reward_api, dict):
+                    self.is_violated_func = self.reward_api[self.IS_VIOLATED_FUNC_ID]
+                    self.get_reward_func = self.reward_api[self.GET_REWARD_FUNC_ID]
+                elif isinstance(self.reward_api, str):
+                    try:
+                        exec(self.reward_api)
+                        self.is_violated_func = locals()["is_violated"]
+                        self.get_reward_func = locals()["get_reward"]
+                    except BaseException:
+                        exec(open(self.reward_api).read())
+                        self.is_violated_func = locals()["is_violated"]
+                        self.get_reward_func = locals()["get_reward"]
+            except BaseException:
+                print("Invalid reward_api!")
+
+        util.log(f"Reward API:{self.reward_api}", level=CONSTANT.INFO)
 
         # Traceback
         self.tracebacks = []
@@ -61,11 +79,9 @@ class Environment(gym.Wrapper):
             self.logger_episode = open(os.path.join(log_dirpath, "episode.log"), "w")
 
     def call_reward_api(self, obs, action, reward):
-        if callable(self.reward_api):
-            _reward_, occured, violated = self.reward_api(obs, action, reward)
-        else:
-            occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
-            _reward_ = self.get_reward_func(violated, reward, obs.reshape(1, -1), action.reshape(1, -1))
+
+        occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
+        _reward_ = self.get_reward_func(obs.reshape(1, -1), action.reshape(1, -1), reward, violated)
 
         self.log(obs, action, reward, _reward_, logger=self.logger_all)
         if occured:
@@ -97,7 +113,7 @@ class Environment(gym.Wrapper):
         if logger:
             logger.write(" ".join(map(str, args)) + "\n")
 
-    def reset(self, *, seed = None, options = {}):
+    def reset(self, *, seed=None, options={}):
         self.counter_step_per_episode = 0
         return super().reset(seed=seed, options=options)
 
@@ -112,7 +128,7 @@ class CallBack(BaseCallback):
         self.buffer = self.model.rollout_buffer if isinstance(
             self.model, OnPolicyAlgorithm) else self.model.replay_buffer
         self.trace_enabled = self.training_env.get_attr(Environment.ATTR_REWARD_API)[0] is not None
-        
+
     def _on_rollout_end(self):
         if self.trace_enabled:
             tracebacks = np.array(self.training_env.get_attr(Environment.ATTR_TRACEBACKS)).T

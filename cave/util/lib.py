@@ -7,7 +7,8 @@ import re
 from typing import Dict, Optional
 
 import numpy as np
-
+from ..import CONSTANT
+from ..import Setting
 
 def load_json(filename):
     """Load json object from a file."""
@@ -110,3 +111,9 @@ def load_bo_json_log(file: str):
 
 def join_keywords(args:list):
     return "_".join(args)
+
+def log(*args, level=CONSTANT.DEBUG, style=CONSTANT.STYLE_RESET,end:str="\n"):
+    if len(args) == 1 and (isinstance(args[0], tuple) or isinstance(args[0], list)):
+        args = args[0]
+    if level >= Setting.LogLevel:
+        print(style+" ".join(map(str, args))+CONSTANT.STYLE_RESET,end=end)
