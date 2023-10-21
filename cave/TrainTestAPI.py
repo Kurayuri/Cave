@@ -1,4 +1,4 @@
-from .Environment import Environment, CallBack, maker_Environment
+from .Environment import CallBack, maker_Environment
 from .import KEYWORD
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
@@ -20,9 +20,10 @@ warnings.filterwarnings("ignore")
 
 def maker_TrainTestAPI(**kwargs):
     def func(**kargs):
-        api=TrainTestAPI(**kargs, **kwargs)
+        api = TrainTestAPI(**kargs, **kwargs)
         return api.ans
     return func
+
 
 class TrainTestAPI:
     ALGOS = {
@@ -32,7 +33,7 @@ class TrainTestAPI:
         "PPO": stable_baselines3.PPO,
         "SAC": stable_baselines3.SAC,
         "TD3": stable_baselines3.TD3
-    }      
+    }
 
     def __init__(self,
                  env_id: str = None,
@@ -51,10 +52,7 @@ class TrainTestAPI:
         # Init ALGO
 
         # Initialize path
-        if curr_model_dirpath is None and next_model_dirpath is None:
-            raise IOError(
-                'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
-            )
+        assert curr_model_dirpath or next_model_dirpath, 'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
 
         self.env_id = env_id
         self.env_kwargs = env_kwargs
@@ -83,7 +81,6 @@ class TrainTestAPI:
 
     def extract_onnxable_model(self, model):
 
-            
         onnxable_model = None
         if isinstance(model, stable_baselines3.DDPG):
             onnxable_model = model.policy.actor.mu
@@ -95,14 +92,14 @@ class TrainTestAPI:
                     super().__init__()
                     self.extractor = model.policy.mlp_extractor
                     self.action_net = model.policy.action_net
-                    self.value_net =  model.policy.value_net
+                    self.value_net = model.policy.value_net
 
                 def forward(self, observation):
                     action_hidden, value_hidden = self.extractor(observation)
                     return self.action_net(action_hidden)
-                
+
             onnxable_model = OnnxablePolicy(model)
-            
+
         elif isinstance(model, stable_baselines3.SAC):
             onnxable_model = model.policy.actor.latent_pi
         elif isinstance(model, stable_baselines3.TD3):
@@ -121,9 +118,10 @@ class TrainTestAPI:
 
         self.reward_api = self.detect_reward_api(self.reward_api, self.next_model_dirpath)
 
-        # env = Environment(env_name, env_config, reward_api, log_dirpath=next_model_dirpath)
+        
         env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath, rank)
-                             for rank in range(self.nproc)], start_method='fork')
+                             for rank in range(self.nproc)], start_method='fork') if self.nproc > 1 else  maker_Environment(
+                                 self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath)()
 
         if self.curr_model_path is not None:
             model = self.ALGO.load(self.curr_model_path, env=env, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
@@ -154,15 +152,16 @@ class TrainTestAPI:
         self.reward_api = self.detect_reward_api(self.reward_api, self.curr_model_dirpath)
 
         # env = Environment(env_id, env_kwargs, reward_api)
-        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, rank=rank) for rank in range(self.nproc)],
-                            start_method='fork')
+        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, rank=rank)
+                             for rank in range(self.nproc)], start_method='fork') if self.nproc > 1 else  maker_Environment(
+                                 self.env_id, self.env_kwargs, self.reward_api)()
 
         model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
 
         mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
         print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
 
-        result={"mean_reward": mean_reward, "std_reward": std_reward}
+        result = {"mean_reward": mean_reward, "std_reward": std_reward}
         with open(os.path.join(self.curr_model_dirpath, self.test_log_filename), 'w') as f:
             json.dump(result, f)
         self.ans = result
