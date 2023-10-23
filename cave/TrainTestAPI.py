@@ -48,7 +48,8 @@ class TrainTestAPI:
                  test_log_filename: str = "test.log",
                  total_cycle: int = 100,
                  mode: str = None,
-                 nproc: int = 1):
+                 nproc: int = 1,
+                 test_episode: int = 100):
         # Init ALGO
 
         # Initialize path
@@ -66,6 +67,7 @@ class TrainTestAPI:
         self.total_cycle = total_cycle
         self.mode = mode
         self.nproc = nproc
+        self.test_episode = test_episode
 
         self.ALGO = self.ALGOS[algo]
 
@@ -158,7 +160,7 @@ class TrainTestAPI:
 
         model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
 
-        mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100)
+        mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes = self.test_episode)
         print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
 
         result = {"mean_reward": mean_reward, "std_reward": std_reward}
@@ -224,7 +226,10 @@ def parse_args():
                         type=int,
                         default=1,
                         help='Number of processes.')
-
+    parser.add_argument("--test_eposide",
+                        type=int,
+                        default=100,
+                        help="Total number of eposides to be test.")
     return parser.parse_args()
 
 
@@ -260,5 +265,6 @@ if __name__ == '__main__':
                  test_log_filename=args.test_log_filename,
                  total_cycle=args.total_cycle,
                  mode=args.mode,
-                 nproc=args.nproc
+                 nproc=args.nproc,
+                 test_episode = args.test_episode
                  )

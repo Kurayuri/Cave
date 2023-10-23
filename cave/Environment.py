@@ -1,13 +1,13 @@
-import os
-import random
-from typing import Any
-import numpy as np
-import gymnasium as gym
+from .import CONSTANT
+from .import util
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from typing import Any
 from typing import Union, Dict
-from .import util
-from .import CONSTANT
+import gymnasium as gym
+import random
+import numpy as np
+import os
 
 
 def maker_Environment(env_id, env_kwargs,
@@ -54,11 +54,14 @@ class Environment(gym.Wrapper):
                         self.is_violated_func = locals()["is_violated"]
                         self.get_reward_func = locals()["get_reward"]
                     except BaseException:
-                        exec(open(self.reward_api).read())
+                        with open(self.reward_api) as f:
+                            exec(f.read())
+                        
                         self.is_violated_func = locals()["is_violated"]
                         self.get_reward_func = locals()["get_reward"]
-            except BaseException:
-                print("Invalid reward_api!")
+            except BaseException as e:
+                raise BaseException("Invalid reward_api.")
+                
 
         util.log(f"Reward API:{self.reward_api}", level=CONSTANT.INFO)
 

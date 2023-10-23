@@ -1,4 +1,3 @@
-from . import util
 
 BYTES_PER_PACKET = 1500
 BITS_PER_BYTE = 8
