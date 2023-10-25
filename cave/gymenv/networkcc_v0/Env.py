@@ -384,8 +384,6 @@ class Env(gym.Env):
                                             np.tile(single_obs_max_vec, self.history_len),
                                             dtype=np.float32)
 
-        self.reward_sum = 0.0
-        self.reward_ewma = 0.0
 
         self.event_record = {"Events":[]}
         self.episodes_run = -1
@@ -437,7 +435,6 @@ class Env(gym.Env):
 
         should_stop = False
 
-        self.reward_sum += reward
         return sender_obs, reward, (self.steps_taken >= self.max_steps or should_stop),False, {}
 
     def print_debug(self):
@@ -472,10 +469,6 @@ class Env(gym.Env):
         self.event_record = {"Events":[]}
         self.net.run_for_dur(self.run_dur)
         self.net.run_for_dur(self.run_dur)
-        self.reward_ewma *= 0.99
-        self.reward_ewma += 0.01 * self.reward_sum
-        print("Reward: %0.2f, Ewma Reward: %0.2f" % (self.reward_sum, self.reward_ewma))
-        self.reward_sum = 0.0
         return self._get_all_sender_obs(),{}
 
     def render(self, mode='human'):
@@ -490,6 +483,5 @@ class Env(gym.Env):
         with open(filename, 'w') as f:
             json.dump(self.event_record, f, indent=4)
 
-gym.register(id='PccNs-v0', entry_point='network_sim:SimulatedNetworkEnv')
 #env = SimulatedNetworkEnv()
 #env.step([1.0])

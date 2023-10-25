@@ -1,10 +1,13 @@
-from .Environment import CallBack, maker_Environment
+from .Environment import CallBack, maker_Environment, Environment
 from .import KEYWORD
+from . import util
+from . import CONSTANT
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.noise import NormalActionNoise
+from stable_baselines3.common.callbacks import ProgressBarCallback
 from collections import OrderedDict
-from typing import Union
+from typing import Union, Iterable, Callable
 import stable_baselines3
 import numpy as np
 import argparse
@@ -19,10 +22,10 @@ warnings.filterwarnings("ignore")
 
 
 def maker_TrainTestAPI(**kwargs):
-    def func(**kargs):
+    def _maker_(**kargs):
         api = TrainTestAPI(**kargs, **kwargs)
         return api.ans
-    return func
+    return _maker_
 
 
 class TrainTestAPI:
@@ -42,7 +45,7 @@ class TrainTestAPI:
                  algo_kwargs: dict = {},
                  curr_model_dirpath: str = None,
                  next_model_dirpath: str = None,
-                 model_filename: str = None,
+                 model_filename: str = "Model.zip",
                  onnx_filename: str = "model.onnx",
                  reward_api: Union[callable, str] = None,
                  test_log_filename: str = "test.log",
@@ -81,8 +84,83 @@ class TrainTestAPI:
         elif mode == KEYWORD.TEST:
             self.test()
 
-    def extract_onnxable_model(self, model):
+    def train(self):
+        os.makedirs(self.next_model_dirpath, exist_ok=True)
 
+        self.reward_api = self.__class__.detect_reward_api(self.reward_api, self.next_model_dirpath)
+
+        if self.nproc > 1:
+            log_dirpaths = self.__class__.get_dirpaths(self.next_model_dirpath, self.nproc)
+            env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, log_dirpath) for log_dirpath in log_dirpaths], start_method='fork')
+        else:
+            log_dirpaths = [self.next_model_dirpath]
+            env = maker_Environment(self.env_id, self.env_kwargs, self.reward_api, log_dirpaths[0])()
+
+        if self.curr_model_path is not None:
+            model = self.ALGO.load(self.curr_model_path, env=env, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
+        else:
+            model = self.ALGO(env=env, verbose=0, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
+
+        callback = CallBack() if self.reward_api else None
+        model.learn(total_timesteps=self.total_cycle, callback=callback, progress_bar=True)
+        
+        env.reset()
+
+        self.__class__.gather_log(log_dirpaths, self.next_model_dirpath)
+
+        model.save(self.next_model_path)
+
+        # Export to ONNX
+        observation_size = model.observation_space.shape
+        dummy_input = torch.randn(1, *observation_size)
+
+        onnxable_model = self.__class__.extract_onnxable_model(model)
+        torch.onnx.export(
+            onnxable_model,
+            dummy_input,
+            self.next_onnx_path,
+            opset_version=9,
+            input_names=["input"],
+        )
+
+        print(self.next_onnx_path)
+
+    def test(self):
+        assert self.curr_model_dirpath, '<curr_model_dirpath> is required.'
+
+        self.reward_api = self.__class__.detect_reward_api(self.reward_api, self.curr_model_dirpath)
+
+        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api)
+                             for rank in range(self.nproc)], start_method='fork') if self.nproc > 1 else maker_Environment(
+                                 self.env_id, self.env_kwargs, self.reward_api)()
+
+        model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
+
+        def evaluate_policy_progress_bar(*args, **kwargs):
+            from tqdm.rich import tqdm
+            pbar = tqdm(total=self.test_episode)
+
+            def callback(locals, globals):
+                pbar.n = len(locals['episode_rewards'])
+                pbar.refresh()
+            mean_reward, std_reward = evaluate_policy(*args, **kwargs, callback=callback)
+            pbar.n = kwargs['n_eval_episodes']
+            pbar.refresh()
+            pbar.close()
+            return mean_reward, std_reward
+
+        mean_reward, std_reward = evaluate_policy_progress_bar(model, env, n_eval_episodes=self.test_episode)
+
+        print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
+
+        result = {"mean_reward": mean_reward, "std_reward": std_reward}
+        with open(os.path.join(self.curr_model_dirpath, self.test_log_filename), 'w') as f:
+            json.dump(result, f)
+        self.ans = result
+        return result
+
+    @classmethod
+    def extract_onnxable_model(cls, model):
         onnxable_model = None
         if isinstance(model, stable_baselines3.DDPG):
             onnxable_model = model.policy.actor.mu
@@ -108,69 +186,39 @@ class TrainTestAPI:
             onnxable_model = model.policy.actor.mu
         return onnxable_model
 
-    def detect_reward_api(self, reward_api, path: str = ""):
-        if isinstance(reward_api, CallBack):
-            return reward_api
+    @classmethod
+    def detect_reward_api(cls, reward_api, path: str = ""):
         if isinstance(reward_api, str):
             reward_api_path = os.path.join(path, reward_api)
             return reward_api_path if os.path.exists(reward_api_path) else reward_api
-
-    def train(self):
-        os.makedirs(self.next_model_dirpath, exist_ok=True)
-
-        self.reward_api = self.detect_reward_api(self.reward_api, self.next_model_dirpath)
-
-        
-        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath, rank)
-                             for rank in range(self.nproc)], start_method='fork') if self.nproc > 1 else  maker_Environment(
-                                 self.env_id, self.env_kwargs, self.reward_api, self.next_model_dirpath)()
-
-        if self.curr_model_path is not None:
-            model = self.ALGO.load(self.curr_model_path, env=env, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
         else:
-            model = self.ALGO(env=env, verbose=0, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
+            return reward_api
 
-        model.learn(total_timesteps=self.total_cycle, callback=CallBack(), progress_bar=True)
-        env.reset()
+    @classmethod
+    def get_dirpaths(cls, dirpath: str, nproc: int):
+        return [os.path.join(dirpath, "rank_%02d" % rank) for rank in range(nproc)]
 
-        model.save(self.next_model_path)
+    @classmethod
+    def gather_log(cls, src_dirpaths: Iterable[str], dst_dirpath: str):
+        if len(src_dirpaths) == 1:
+            if src_dirpaths[0] == dst_dirpath:
+                return
 
-        # Export to ONNX
-        observation_size = model.observation_space.shape
-        dummy_input = torch.randn(1, *observation_size)
-
-        onnxable_model = self.extract_onnxable_model(model)
-        torch.onnx.export(
-            onnxable_model,
-            dummy_input,
-            self.next_onnx_path,
-            opset_version=9,
-            input_names=["input"],
-        )
-
-        print(self.next_onnx_path)
-
-    def test(self):
-        self.reward_api = self.detect_reward_api(self.reward_api, self.curr_model_dirpath)
-
-        # env = Environment(env_id, env_kwargs, reward_api)
-        env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs, self.reward_api, rank=rank)
-                             for rank in range(self.nproc)], start_method='fork') if self.nproc > 1 else  maker_Environment(
-                                 self.env_id, self.env_kwargs, self.reward_api)()
-
-        model = self.ALGO.load(self.curr_model_path, env=env, **self.algo_kwargs)
-
-        mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes = self.test_episode)
-        print(f"Test: mean_reward:{mean_reward:.2f} +/- {std_reward:.2f}")
-
-        result = {"mean_reward": mean_reward, "std_reward": std_reward}
-        with open(os.path.join(self.curr_model_dirpath, self.test_log_filename), 'w') as f:
-            json.dump(result, f)
-        self.ans = result
-        return result
-
+        log_filenames = Environment.LOG_FILENAMES
+        for log_filename in log_filenames:
+            dst_file = open(os.path.join(dst_dirpath, log_filename), 'w')
+            for src_dirpath in src_dirpaths:
+                try:
+                    src_path = os.path.join(src_dirpath, log_filename)
+                    with open(src_path, "r") as src_file:
+                        dst_file.write(src_file.read())
+                except BaseException:
+                    util.log(f"No such file: {src_path}", level=CONSTANT.DEBUG)
+            dst_file.close()
 
 # %%
+
+
 def parse_args():
     """Parse arguments from the command line."""
     parser = argparse.ArgumentParser("API for training and testing.")
@@ -266,5 +314,5 @@ if __name__ == '__main__':
                  total_cycle=args.total_cycle,
                  mode=args.mode,
                  nproc=args.nproc,
-                 test_episode = args.test_episode
+                 test_episode=args.test_episode
                  )

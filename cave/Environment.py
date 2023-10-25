@@ -2,6 +2,7 @@ from .import CONSTANT
 from .import util
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
+from stable_baselines3.common.monitor import Monitor
 from typing import Any
 from typing import Union, Dict
 import gymnasium as gym
@@ -11,32 +12,39 @@ import os
 
 
 def maker_Environment(env_id, env_kwargs,
-                      reward_api: Union[str, callable] = None,
-                      log_dirpath: str = "", rank: int = None):
-    if rank is not None and log_dirpath:
-        log_dirpath = os.path.join(log_dirpath, "rank_%02d" % rank)
-    return lambda: Environment(env_id, env_kwargs, reward_api, log_dirpath, rank)
+                      reward_api: Union[str, Dict[str, callable]] = None,
+                      log_dirpath: str = ""):
+    def _maker_():
+        return Monitor(Environment(env_id, env_kwargs, reward_api, log_dirpath))
+        # return gym.make(env_id)
+    return _maker_
 
 
 class Environment(gym.Wrapper):
     ATTR_REWARD_API = "reward_api"
-    ATTR_TRACEBACKS = "tracebacks"
+    ATTR_REWARD_TRACE = "reward_trace"
 
     GET_REWARD_FUNC_ID = "get_reward"
     IS_VIOLATED_FUNC_ID = "is_violated"
 
+    LOG_FILENAME_ALL = "all.log"
+    LOG_FILENAME_VIOLATED = "violated.log"
+    LOG_FILENAME_OCCURRED = "occurred.log"
+    LOG_FILENAME_EPISODE = "episode.log"
+    LOG_FILENAMES = (LOG_FILENAME_ALL, LOG_FILENAME_OCCURRED, LOG_FILENAME_VIOLATED, LOG_FILENAME_EPISODE)
+
     def __init__(self, env_id, env_kwargs,
                  reward_api: Union[str, Dict[str, callable]] = None,
-                 log_dirpath: str = "", rank: int = 0):
+                 log_dirpath: str = ""):
         env = gym.make(env_id, **env_kwargs)
 
         super().__init__(env)
 
-        # TODO
         self.reward_api = reward_api
-        self.rank = rank
-        # self.is_violated_func = None
+
+        self.is_violated_func = None
         self.get_reward_func = None
+
         self.log_dirpath = log_dirpath
 
         self.counter_step_per_episode = 0
@@ -51,48 +59,46 @@ class Environment(gym.Wrapper):
                 elif isinstance(self.reward_api, str):
                     try:
                         exec(self.reward_api)
-                        self.is_violated_func = locals()["is_violated"]
-                        self.get_reward_func = locals()["get_reward"]
+                        self.is_violated_func = locals()[self.IS_VIOLATED_FUNC_ID]
+                        self.get_reward_func = locals()[self.GET_REWARD_FUNC_ID]
                     except BaseException:
                         with open(self.reward_api) as f:
                             exec(f.read())
-                        
-                        self.is_violated_func = locals()["is_violated"]
-                        self.get_reward_func = locals()["get_reward"]
+
+                        self.is_violated_func = locals()[self.IS_VIOLATED_FUNC_ID]
+                        self.get_reward_func = locals()[self.GET_REWARD_FUNC_ID]
             except BaseException as e:
                 raise BaseException("Invalid reward_api.")
-                
 
-        util.log(f"Reward API:{self.reward_api}", level=CONSTANT.INFO)
+        util.log(f"Reward API: {self.reward_api}", level=CONSTANT.INFO)
 
-        # Traceback
-        self.tracebacks = []
+        # Reward Trace
+        setattr(self, self.ATTR_REWARD_TRACE, [])
 
         # logger
-        self.logger_all = None
-        self.logger_occurred = None
-        self.logger_violated = None
-        self.logger_episode = None
+        self.loggers = {k: None for k in self.LOG_FILENAMES}
 
         if self.log_dirpath:
             os.makedirs(self.log_dirpath, exist_ok=True)
-            self.logger_all = open(os.path.join(log_dirpath, "all.log"), "w")
-            self.logger_occurred = open(os.path.join(log_dirpath, "occurred.log"), "w")
-            self.logger_violated = open(os.path.join(log_dirpath, "violated.log"), "w")
-            self.logger_episode = open(os.path.join(log_dirpath, "episode.log"), "w")
+            self.loggers[self.LOG_FILENAME_ALL] = open(os.path.join(log_dirpath, self.LOG_FILENAME_ALL), "w")
+            self.loggers[self.LOG_FILENAME_EPISODE] = open(os.path.join(log_dirpath, self.LOG_FILENAME_EPISODE), "w")
+            if self.reward_api:
+                self.loggers[self.LOG_FILENAME_OCCURRED] = open(os.path.join(log_dirpath, self.LOG_FILENAME_OCCURRED), "w")
+                self.loggers[self.LOG_FILENAME_VIOLATED] = open(os.path.join(log_dirpath, self.LOG_FILENAME_VIOLATED), "w")
 
     def call_reward_api(self, obs, action, reward):
+        _reward_ = reward
 
-        occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
-        _reward_ = self.get_reward_func(obs.reshape(1, -1), action.reshape(1, -1), reward, violated)
+        if self.reward_api:
+            occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
+            _reward_ = self.get_reward_func(obs.reshape(1, -1), action.reshape(1, -1), reward, violated)
 
-        self.log(obs, action, reward, _reward_, logger=self.logger_all)
-        if occured:
-            self.log(obs, action, reward, _reward_, logger=self.logger_occurred)
-        if violated:
-            self.log(obs, action, reward, _reward_, logger=self.logger_violated)
+            getattr(self, self.ATTR_REWARD_TRACE).append(_reward_ - reward)
 
-        self.tracebacks.append(_reward_ - reward)
+            if occured:
+                self.log(obs, action, reward, _reward_, logger=self.LOG_FILENAME_OCCURRED)
+            if violated:
+                self.log(obs, action, reward, _reward_, logger=self.LOG_FILENAME_VIOLATED)
 
         return _reward_
 
@@ -105,16 +111,21 @@ class Environment(gym.Wrapper):
         #     obs[0]=random.uniform(-2.4,-2)
         #     obs[2]=random.uniform(0.15,0.21)
 
-        if self.reward_api:
-            reward = self.call_reward_api(obs, action, reward)
+        _reward_ = self.call_reward_api(obs, action, reward)
+
+        self.log(obs, action, reward, _reward_, logger=self.LOG_FILENAME_ALL)
+
         if terminated or truncated:
             self.counter_episode += 1
-            self.log(f"Steps: {self.counter_step_per_episode} Total Episodes: {self.counter_episode}", logger=self.logger_episode)
-        return obs, reward, terminated, truncated, info
+            self.log(f"Steps: {self.counter_step_per_episode} Total Episodes: {self.counter_episode}", logger=self.LOG_FILENAME_EPISODE)
+
+            [logger.flush() if logger else None for logger in self.loggers.values()]
+
+        return obs, _reward_, terminated, truncated, info
 
     def log(self, *args, logger):
-        if logger:
-            logger.write(" ".join(map(str, args)) + "\n")
+        if self.loggers[logger]:
+            self.loggers[logger].write(" ".join(map(str, args)) + "\n")
 
     def reset(self, *, seed=None, options={}):
         self.counter_step_per_episode = 0
@@ -122,10 +133,11 @@ class Environment(gym.Wrapper):
 
 
 class CallBack(BaseCallback):
+    REWARD_TRACE_GAMME = 0.5
+    REWARD_TRACE_DEPTH = 5
+
     def __init__(self, verbose=0):
         super().__init__(verbose)
-        self.trace_gamma = 0.5
-        self.trace_depth = 5
 
     def _init_callback(self):
         self.buffer = self.model.rollout_buffer if isinstance(
@@ -134,12 +146,14 @@ class CallBack(BaseCallback):
 
     def _on_rollout_end(self):
         if self.trace_enabled:
-            tracebacks = np.array(self.training_env.get_attr(Environment.ATTR_TRACEBACKS)).T
-            self.training_env.set_attr(Environment.ATTR_TRACEBACKS, [])
-            num_rows = tracebacks.shape[0]
+            reward_traces = np.array(self.training_env.get_attr(Environment.ATTR_REWARD_TRACE)).T
+            num_rows = reward_traces.shape[0]
             for i in range(num_rows - 2, -1, -1):
-                tracebacks[i] += tracebacks[i + 1] * self.trace_gamma
-            self.buffer.rewards[:num_rows] += tracebacks
+                reward_traces[i] += reward_traces[i + 1] * self.REWARD_TRACE_GAMME
+            self.buffer.rewards[:num_rows] += reward_traces
+
+            # Clear Reward Trace
+            self.training_env.set_attr(Environment.ATTR_REWARD_TRACE, [])
 
     def _on_step(self):
         return True
