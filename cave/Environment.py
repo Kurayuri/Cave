@@ -3,11 +3,13 @@ from .import util
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import obs_as_tensor
 from typing import Any
 from typing import Union, Dict
 import gymnasium as gym
 import random
 import numpy as np
+import torch as th
 import os
 
 
@@ -93,7 +95,7 @@ class Environment(gym.Wrapper):
             occured, violated = self.is_violated_func(obs.reshape(1, -1), action.reshape(1, -1))
             _reward_ = self.get_reward_func(obs.reshape(1, -1), action.reshape(1, -1), reward, violated)
 
-            getattr(self, self.ATTR_REWARD_TRACE).append(_reward_ - reward)
+            getattr(self, self.ATTR_REWARD_TRACE).append(float(_reward_ - reward))
 
             if occured:
                 self.log(obs, action, reward, _reward_, logger=self.LOG_FILENAME_OCCURRED)
@@ -140,20 +142,32 @@ class CallBack(BaseCallback):
         super().__init__(verbose)
 
     def _init_callback(self):
-        self.buffer = self.model.rollout_buffer if isinstance(
-            self.model, OnPolicyAlgorithm) else self.model.replay_buffer
+        self.is_OnPolicyAlgorithm = isinstance(self.model, OnPolicyAlgorithm)
+        self.buffer = self.model.rollout_buffer if self.is_OnPolicyAlgorithm else self.model.replay_buffer
         self.trace_enabled = self.training_env.get_attr(Environment.ATTR_REWARD_API)[0] is not None
 
     def _on_rollout_end(self):
         if self.trace_enabled:
             reward_traces = np.array(self.training_env.get_attr(Environment.ATTR_REWARD_TRACE)).T
             num_rows = reward_traces.shape[0]
+
             for i in range(num_rows - 2, -1, -1):
                 reward_traces[i] += reward_traces[i + 1] * self.REWARD_TRACE_GAMME
             self.buffer.rewards[:num_rows] += reward_traces
 
             # Clear Reward Trace
             self.training_env.set_attr(Environment.ATTR_REWARD_TRACE, [])
+
+            ### In Stable Baseline3, callback is called after return and advantage computaion for OnPolicyAlgorithm
+            ### File path: stable_baselines3/common/on_policy_algorithm.py
+            ###
+            ## rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
+            ## callback.on_rollout_end()
+            if self.is_OnPolicyAlgorithm:
+                with th.no_grad():
+                    values = self.model.policy.predict_values(obs_as_tensor(self.locals['new_obs'], self.model.device))
+                self.buffer.compute_returns_and_advantage(last_values=values, dones=self.locals['dones'])
+            
 
     def _on_step(self):
         return True

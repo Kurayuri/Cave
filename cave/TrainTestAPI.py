@@ -7,7 +7,7 @@ from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.callbacks import ProgressBarCallback
 from collections import OrderedDict
-from typing import Union, Iterable, Callable
+from typing import Any, Union, Iterable, Callable
 import stable_baselines3
 import numpy as np
 import argparse
@@ -102,7 +102,7 @@ class TrainTestAPI:
             model = self.ALGO(env=env, verbose=0, tensorboard_log=self.next_model_dirpath, **self.algo_kwargs)
 
         callback = CallBack() if self.reward_api else None
-        model.learn(total_timesteps=self.total_cycle, callback=callback, progress_bar=True)
+        model.learn(total_timesteps=self.total_cycle, callback=callback, reset_num_timesteps=False,progress_bar=True)
         
         env.reset()
 
