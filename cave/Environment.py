@@ -63,7 +63,7 @@ class Environment(gym.Wrapper):
                         exec(self.reward_api)
                         self.is_violated_func = locals()[self.IS_VIOLATED_FUNC_ID]
                         self.get_reward_func = locals()[self.GET_REWARD_FUNC_ID]
-                    except BaseException:
+                    except BaseException as e:
                         with open(self.reward_api) as f:
                             exec(f.read())
 
