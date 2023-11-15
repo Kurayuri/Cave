@@ -96,6 +96,7 @@ class TrainTestAPI:
         self.reward_api = self.__class__.detect_reward_api(
             self.reward_api, self.next_model_dirpath)
 
+        # Use SubprocVecEnv
         if self.nproc > 1:
             log_dirpaths = self.__class__.get_dirpaths(self.next_model_dirpath,
                                                        self.nproc)
@@ -111,6 +112,7 @@ class TrainTestAPI:
                                     self.env_options, self.reward_api,
                                     log_dirpaths[0])()
 
+        # Resuming Train
         if self.curr_model_path is not None:
             model = self.ALGO.load(self.curr_model_path,
                                    env=env,
@@ -122,6 +124,7 @@ class TrainTestAPI:
                               tensorboard_log=self.next_model_dirpath,
                               **self.algo_kwargs)
 
+        # Callback
         eval_env = maker_Environment(self.env_id, self.env_kwargs,
                                      self.env_options)()
         no_improvement_callback = StopTrainingOnNoModelImprovement(
@@ -141,15 +144,28 @@ class TrainTestAPI:
         callback = [eval_callback]
         callback.append(CallBack()) if self.reward_api else None
 
+        # Learn
         model.learn(total_timesteps=self.total_timestep,
                     callback=callback,
                     reset_num_timesteps=False,
                     progress_bar=True)
+        obs = env.reset()
 
-        env.reset()
+        # Gather info, log
+        reset_infos = env.reset_infos if isinstance(env,SubprocVecEnv) else [obs[1]]
 
+        info = {k:0 for k in reset_infos[0]}
+        for reset_info in reset_infos:
+            for k,v in reset_info.items():
+                info[k] += v
+
+        info["num_timesteps"] = model.num_timesteps
+        print(info)
+        
         self.__class__.gather_log(log_dirpaths, self.next_model_dirpath)
 
+
+        # Save
         model.save(self.next_model_path)
 
         # Export to ONNX
@@ -166,6 +182,9 @@ class TrainTestAPI:
         )
 
         print(self.next_onnx_path)
+
+        self.ans = info
+        return info
 
     def test(self):
         assert self.curr_model_dirpath, '<curr_model_dirpath> is required.'
@@ -266,7 +285,7 @@ class TrainTestAPI:
             if src_dirpaths[0] == dst_dirpath:
                 return
 
-        log_filenames = Environment.LOG_FILENAMES
+        log_filenames = Environment.LOG_FILENAMES.values()
         for log_filename in log_filenames:
             dst_file = open(os.path.join(dst_dirpath, log_filename), 'w')
             for src_dirpath in src_dirpaths:
@@ -278,13 +297,16 @@ class TrainTestAPI:
                     util.log(f"No such file: {src_path}", level=CONSTANT.DEBUG)
             dst_file.close()
 
+    # def gather_info(self, infos):
+        
+
     @classmethod
     def merge_log(cls, src_dirpaths: Iterable[str], dst_dirpath: str):
         if len(src_dirpaths) == 1:
             if src_dirpaths[0] == dst_dirpath:
                 return
 
-        log_filenames = Environment.LOG_FILENAMES
+        log_filenames = Environment.LOG_FILENAMES.values()
         for log_filename in log_filenames:
             dst_file = open(os.path.join(dst_dirpath, log_filename), 'w')
             src_files = []

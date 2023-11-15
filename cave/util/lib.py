@@ -117,3 +117,10 @@ def log(*args, level=CONSTANT.DEBUG, style=CONSTANT.STYLE_RESET,end:str="\n"):
         args = args[0]
     if level >= Setting.LogLevel:
         print(style+" ".join(map(str, args))+CONSTANT.STYLE_RESET,end=end)
+
+def safe_divison(a, b):
+    try:
+        ans =  a / b
+        return 0.0 if np.isnan(ans) or ans is None else ans
+    except:
+        return 0.0
