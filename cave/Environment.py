@@ -50,6 +50,8 @@ class Environment(gym.Wrapper):
     LOG_SUM_OCCURRED = 'sum_occ'
     LOG_SUM_VIOLATED = 'sum_vio'
 
+    # LOG_ID = "id"
+
     LOGS_EP  = (LOG_ALL, LOG_EPISODE, LOG_EP_OCCURRED, LOG_EP_VIOLATED, LOG_EP_REWARD_DELTA)
     LOGS_SUM_DEPENDENCY = {LOG_SUM_OCCURRED:LOG_EP_OCCURRED, LOG_SUM_VIOLATED:LOG_EP_VIOLATED}
     LOGS_EP_CONTRIBUTION = {v:k for k,v in LOGS_SUM_DEPENDENCY.items()}
@@ -116,12 +118,12 @@ class Environment(gym.Wrapper):
         
     
         self.loggers = {}
-        self.enabled_loggers=[]
+        self.enabled_loggers= []
         if self.log_dirpath:
             os.makedirs(self.log_dirpath, exist_ok=True)
             self.enabled_loggers =  [self.LOG_ALL, self.LOG_EPISODE]
             if self.reward_api:
-                self.enabled_loggers = [self.LOG_EP_OCCURRED,self.LOG_EP_VIOLATED]
+                self.enabled_loggers.extend([self.LOG_EP_OCCURRED,self.LOG_EP_VIOLATED])
 
             for k in self.enabled_loggers:
                 self.loggers[k]=open(os.path.join(log_dirpath, self.LOG_FILENAMES[k]), "w")
@@ -148,8 +150,7 @@ class Environment(gym.Wrapper):
 
             [logger.flush() if logger else None for logger in self.loggers.values()]
 
-            info[self.CAVE]=dict(self.infos)
-            # print(info)
+            info = self.edit_info(info, self.infos)
         return obs, _reward_, terminated, truncated, info
 
     def reset(self, *, seed=None, options={}):
@@ -158,7 +159,8 @@ class Environment(gym.Wrapper):
         obs, info = super().reset(seed=seed, options=options)
 
         self.update_info_sum()
-        info.update({k:self.infos[k] for k in self.LOGS_SUM if k in self.infos})
+        
+        info = self.edit_info(info, {k:self.infos[k] for k in self.LOGS_SUM if k in self.infos})
                 
         for k in self.infos.keys():
             if k in self.LOGS_EP:
@@ -175,7 +177,7 @@ class Environment(gym.Wrapper):
             _reward_ = self.get_reward_func(obs.reshape(1, -1), action.reshape(1, -1), reward, violated)
 
             # if truncated
-            _reward_delta = float(_reward_ - reward)
+            _reward_delta = - float(_reward_ - reward)
             getattr(self, self.ATTR_REWARD_TRACE).append(_reward_delta)
             self.infos
 
@@ -211,12 +213,17 @@ class Environment(gym.Wrapper):
         log_sum = self.LOGS_EP_CONTRIBUTION[log_ep]
         self.infos[log_sum] += 1
     
-    
+    def edit_info(self, info, cave_info):
+        cave_info = dict(cave_info)
+        # cave_info[self.CAVE][self.LOG_ID] = random.getrandbits(16)
+        info[self.CAVE]=cave_info
+        return info
 
 
 class CallBack(BaseCallback):
     REWARD_TRACE_GAMME = 0.9
     REWARD_TRACE_DEPTH = 20
+    REWARD_EWMA_ALPHA = 0.01
 
     TRACE = "Trace"
     STOP_TRAINING_ON_MAX_EPISODES = "StopOnEpisodes"
@@ -237,15 +244,26 @@ class CallBack(BaseCallback):
 
     def _init_callback(self):
         self.is_OnPolicyAlgorithm = isinstance(self.model, OnPolicyAlgorithm)
-        self.buffer = self.model.rollout_buffer if self.is_OnPolicyAlgorithm else self.model.replay_buffer
+        self.trajectory_buffer = self.model.rollout_buffer if self.is_OnPolicyAlgorithm else self.model.replay_buffer
+
+        self.nproc = len(self.training_env.get_attr("action_space"))
+
         self.enabled_trace = self.training_env.get_attr(
             Environment.ATTR_REWARD_API)[0] is not None
         
         self.ep_info_buffer = deque(maxlen=self.model._stats_window_size)
-        self.monitor_ep_info_buffer = deque(maxlen=self.model._stats_window_size)
+        
+        self.ep_reward_ewma = 0
+        self.sum_occurreds = [0 for i in range(self.nproc)]
+        self.sum_violateds = [0 for i in range(self.nproc)]
 
     def _on_rollout_end(self):
         self.module_trace()
+
+    def _on_step(self):
+        self.module_tensorboard_record()
+        return True
+    
 
     def module_trace(self):
         if not self.enabled_trace:
@@ -257,7 +275,7 @@ class CallBack(BaseCallback):
 
         for i in range(num_rows - 2, -1, -1):
             reward_traces[i] += reward_traces[i + 1] * self.REWARD_TRACE_GAMME
-        self.buffer.rewards[:num_rows] += reward_traces
+        self.trajectory_buffer.rewards[:num_rows] += reward_traces
 
         # Clear Reward Trace
         self.training_env.set_attr(Environment.ATTR_REWARD_TRACE, [])
@@ -271,38 +289,66 @@ class CallBack(BaseCallback):
             with th.no_grad():
                 values = self.model.policy.predict_values(
                     obs_as_tensor(self.locals['new_obs'], self.model.device))
-            self.buffer.compute_returns_and_advantage(
+            self.trajectory_buffer.compute_returns_and_advantage(
                 last_values=values, dones=self.locals['dones'])
 
-    def _on_step(self):
+    def module_tensorboard_record(self):
         infos = self.locals["infos"]
-        self.update_info_buffer(infos)
-        # self.logger.dump(self.num_timesteps)
+        buffer_shift = self.update_info_buffer(infos)
+        self.logger.dump(self.num_timesteps-self.nproc)
         ep_info_buffer=self.ep_info_buffer
+        
+        if buffer_shift:
+            ep_lens = [info[self.INFO_KEY_MONITOR]["l"] for info in ep_info_buffer]
+            ep_rewards = [info[self.INFO_KEY_MONITOR]["r"] for info in ep_info_buffer]
+            ep_len_mean = safe_mean(ep_lens)
 
 
-        if len(ep_info_buffer) > 0 and self.INFO_KEY_CAVE in ep_info_buffer[0] and Environment.LOG_EP_VIOLATED in ep_info_buffer[0][self.INFO_KEY_CAVE]:
-            ep_occurred = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_OCCURRED] for info in ep_info_buffer]
-            ep_violated = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_VIOLATED] for info in ep_info_buffer]
-            ep_reward_delta = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_REWARD_DELTA] for info in ep_info_buffer]
-            ep_occurred_mean = safe_mean(ep_occurred)
-            ep_violated_mean = safe_mean(ep_violated)
+            # ep_reward_ewma
+            buffer_len=len(ep_info_buffer)
+            for i in range(max(buffer_len-buffer_shift,0), buffer_len):
+                self.ep_reward_ewma = ep_rewards[i]*self.REWARD_EWMA_ALPHA + self.ep_reward_ewma*(1-self.REWARD_EWMA_ALPHA)
 
-            ep_len = [info[self.INFO_KEY_MONITOR]["l"] for info in ep_info_buffer]
-            ep_len_mean = safe_mean(ep_len)
+            self.logger.record("rollout/ep_reward_ewma", self.ep_reward_ewma)
 
-            self.logger.record("rollout/cave_eps_occurred_mean", ep_occurred_mean)
-            self.logger.record("rollout/cave_eps_violated_mean", ep_violated_mean)
-            self.logger.record("rollout/cave_epr_v_mean", safe_divison(ep_violated_mean,ep_violated_mean))
-            self.logger.record("rollout/cave_epr_o_mean", safe_divison(ep_violated_mean,ep_len_mean))
-            self.logger.record("rollout/cave_epr_vt_mean", safe_divison(ep_violated_mean,ep_len_mean))
-            self.logger.record("rollout/cave_epd_reward_delta_mean", safe_divison(safe_mean(ep_reward_delta),ep_len_mean))
-        return True
-    
+            if  self.INFO_KEY_CAVE in ep_info_buffer[0] and Environment.LOG_EP_VIOLATED in ep_info_buffer[0][self.INFO_KEY_CAVE]:
+                ep_occurreds = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_OCCURRED] for info in ep_info_buffer]
+                ep_violateds = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_VIOLATED] for info in ep_info_buffer]
+                ep_reward_deltas = [info[self.INFO_KEY_CAVE][Environment.LOG_EP_REWARD_DELTA] for info in ep_info_buffer]
+
+                ep_occurred_mean = safe_mean(ep_occurreds)
+                ep_violated_mean = safe_mean(ep_violateds)
+                ep_reward_delta_mean = safe_mean(ep_reward_deltas)
+            
+                # ep_reward_mean = safe_mean(ep_rewards)
+
+                # record
+                self.logger.record("rollout/cave_eps_occurred_mean", ep_occurred_mean)
+                self.logger.record("rollout/cave_eps_violated_mean", ep_violated_mean)
+
+                self.logger.record("rollout/cave_sum_occurred_mean", sum(self.sum_occurreds))
+                self.logger.record("rollout/cave_sum_violated_mean", sum(self.sum_violateds))
+                
+                self.logger.record("rollout/cave_epr_occurred_mean", safe_divison(ep_occurred_mean,ep_len_mean))
+                self.logger.record("rollout/cave_epr_violated_mean", safe_divison(ep_violated_mean,ep_len_mean))
+                self.logger.record("rollout/cave_epr_vo_mean", safe_divison(ep_violated_mean,ep_occurred_mean))
+
+                self.logger.record("rollout/cave_epd_reward_delta_mean", safe_divison(ep_reward_delta_mean,ep_violated_mean))
+
+
+
+
     def update_info_buffer(self, infos):
+        buffer_shift = 0
+        self.sum_occurred = []
         for idx, info in enumerate(infos):            
             maybe_info = {k:info[k] for k in self.INFO_KEYS if k in info}
-
             if maybe_info:
+                buffer_shift += 1
                 self.ep_info_buffer.extend([maybe_info])
-            
+                if self.INFO_KEY_CAVE in maybe_info:
+                    self.sum_violateds[idx] = maybe_info[self.INFO_KEY_CAVE][Environment.LOG_SUM_VIOLATED]
+                    self.sum_occurreds[idx] = maybe_info[self.INFO_KEY_CAVE][Environment.LOG_SUM_OCCURRED]
+
+        return buffer_shift
+    

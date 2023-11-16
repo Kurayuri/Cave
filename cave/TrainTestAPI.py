@@ -154,13 +154,13 @@ class TrainTestAPI:
         # Gather info, log
         reset_infos = env.reset_infos if isinstance(env,SubprocVecEnv) else [obs[1]]
 
-        info = {k:0 for k in reset_infos[0]}
+        cave_info = {k:0 for k in reset_infos[0][Environment.CAVE]}
         for reset_info in reset_infos:
-            for k,v in reset_info.items():
-                info[k] += v
+            for k,v in reset_info[Environment.CAVE].items():
+                cave_info[k] += v
 
-        info["num_timesteps"] = model.num_timesteps
-        print(info)
+        cave_info["num_timesteps"] = model.num_timesteps
+        print(cave_info)
         
         self.__class__.gather_log(log_dirpaths, self.next_model_dirpath)
 
@@ -183,8 +183,8 @@ class TrainTestAPI:
 
         print(self.next_onnx_path)
 
-        self.ans = info
-        return info
+        self.ans = cave_info
+        return cave_info
 
     def test(self):
         assert self.curr_model_dirpath, '<curr_model_dirpath> is required.'
