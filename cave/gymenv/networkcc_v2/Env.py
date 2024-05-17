@@ -2,7 +2,7 @@ from .import Trace
 from .Link import Link
 from .Network import Network
 from .Sender import Sender
-from ...CONSTANT import *
+from ...CONST import *
 from ...util.lib import pcc_aurora_reward
 from ...common import sender_obs
 import gymnasium as gym

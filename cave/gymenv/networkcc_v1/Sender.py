@@ -13,7 +13,7 @@
 # limitations under the License.
 from .Trace import generate_traces
 from .Link import Link
-from ...CONSTANT import *
+from ...CONST import *
 from ...util.lib import pcc_aurora_reward
 from ...common import sender_obs
 import numpy as np

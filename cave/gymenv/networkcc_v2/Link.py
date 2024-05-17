@@ -1,4 +1,4 @@
-from ...CONSTANT import BITS_PER_BYTE, BYTES_PER_PACKET
+from ...CONST import BITS_PER_BYTE, BYTES_PER_PACKET
 from .Trace import Trace
 from typing import Tuple
 import random

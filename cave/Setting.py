@@ -1,5 +1,5 @@
-from .import CONSTANT
-LogLevel = CONSTANT.INFO
+from .import CONST
+LogLevel = CONST.INFO
 
 def set_LogLevel(level):
     global LogLevel

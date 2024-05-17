@@ -1,5 +1,5 @@
 from ...import util
-from ...CONSTANT import BITS_PER_BYTE, BYTES_PER_PACKET
+from ...CONST import BITS_PER_BYTE, BYTES_PER_PACKET
 from ...import KEYWORD
 from ...import DEFAULT
 from bisect import bisect_right
