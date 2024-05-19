@@ -1,3 +1,6 @@
+import stable_baselines3.common
+import stable_baselines3.common.base_class
+import stable_baselines3.common.off_policy_algorithm
 from .Environment import CallBack, maker_Environment, Environment
 from .import KEYWORD
 from .import util
@@ -8,6 +11,8 @@ from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.noise import NormalActionNoise
 from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, StopTrainingOnMaxEpisodes, StopTrainingOnRewardThreshold
+from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
+from stable_baselines3.common.base_class import BaseAlgorithm
 from wandb.integration.sb3 import WandbCallback
 from collections import OrderedDict
 from typing import Any, Union, Iterable, Callable, Tuple
@@ -28,8 +33,6 @@ warnings.filterwarnings("ignore")
 
 def maker_TrainTestAPI(**kwargs):
     def _maker_(**kargs):
-        print(kwargs)
-        print(kargs)
         for kw, arg in kwargs.items():
             kargs[kw] = arg
             if kw in kargs:
@@ -98,15 +101,19 @@ class TrainTestAPI:
         self.use_wandb = use_wandb
 
         self.ALGO = self.ALGOS[algo]
+        self.buffer_filename = "buffer"
 
-        self.curr_model_path = os.path.join(
-            curr_model_dirpath, model_filename) if curr_model_dirpath else None
+        self.curr_model_path, self.curr_buffer_path = (
+            os.path.join(curr_model_dirpath, model_filename),
+            os.path.join(curr_model_dirpath, self.buffer_filename)
+        )if curr_model_dirpath else (None, None)
 
-        self.next_model_path, self.next_onnx_path = (
+        self.next_model_path, self.next_onnx_path, self.next_buffer_path = (
             os.path.join(next_model_dirpath, model_filename),
-            os.path.join(next_model_dirpath,
-                         onnx_filename)) if next_model_dirpath else (None,
-                                                                     None)
+            os.path.join(next_model_dirpath, onnx_filename),
+            os.path.join(next_model_dirpath, self.buffer_filename),
+        ) if next_model_dirpath else (None, None, None)
+
         self.ans = None
         if mode == KEYWORD.TRAIN:
             self.train()
@@ -118,7 +125,7 @@ class TrainTestAPI:
 
         self.reward_api = self.__class__.detect_reward_api(
             self.reward_api, self.next_model_dirpath)
-
+        # print(self.reward_api)
         # Use SubprocVecEnv
         if self.nproc > 1:
             log_dirpaths = self.__class__.get_dirpaths(self.next_model_dirpath,
@@ -135,15 +142,19 @@ class TrainTestAPI:
                                     self.env_options, self.reward_api,
                                     log_dirpaths[0])()
 
-        # Resuming Train
+        model: BaseAlgorithm
         if self.curr_model_path is not None:
+            # Resuming Train
             model = self.ALGO.load(self.curr_model_path,
                                    env=env,
                                    #    tensorboard_log=self.next_model_dirpath,
                                    tensorboard_log=os.path.dirname(
                                        self.next_model_dirpath),
                                    **self.algo_kwargs)
+            if isinstance(model, OffPolicyAlgorithm):
+                model.load_replay_buffer(self.curr_buffer_path)
         else:
+            # New Train
             model = self.ALGO(env=env,
                               verbose=0,
                               #   tensorboard_log=self.next_model_dirpath,
@@ -170,7 +181,8 @@ class TrainTestAPI:
             best_model_save_path=self.next_model_dirpath,
             verbose=1)
 
-        callback = [eval_callback]
+        callback = []
+        callback.append(eval_callback if self.eval_freq else None)
         if self.use_wandb:
             callback.append(WandbCallback(
                 # gradient_save_freq=100, model_save_path=f"models/{run.id}",
@@ -202,22 +214,12 @@ class TrainTestAPI:
 
         # Save
         model.save(self.next_model_path)
+        if isinstance(model, OffPolicyAlgorithm):
+            model.save_replay_buffer(self.next_buffer_path)
 
         # Export to ONNX
 
         interface.stable_baselines3.export_to_onnx(model, self.next_onnx_path, lambda shape: (1, *shape))
-
-        # observation_size = model.observation_space.shape
-        # dummy_input = torch.randn(1, *observation_size)
-
-        # onnxable_model = self.__class__.extract_onnxable_model(model)
-        # torch.onnx.export(
-        #     onnxable_model,
-        #     dummy_input,
-        #     self.next_onnx_path,
-        #     opset_version=9,
-        #     input_names=["input"],
-        # )
 
         print(self.next_onnx_path)
 
