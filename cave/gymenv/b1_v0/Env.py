@@ -24,7 +24,7 @@ class Env(gym.Env):
         self.observation_space = spaces.Box(low=-high,
                                             high=high,
                                             dtype=np.float32)
-
+        self.max_episode_steps = 150
         self.seed()
 
     def seed(self, seed=None):
@@ -47,7 +47,7 @@ class Env(gym.Env):
         self.state = np.array([p_new, v_new], dtype=np.float32)
 
         reward = -2
-        
+
         terminated = bool(0.2 >= float(p_new) >= 0 and 0.3 >= float(v_new) >= 0.05)
 
         # if bool(abs(p_new) > 1.5 or abs(v_new) > 1.5):
@@ -59,17 +59,12 @@ class Env(gym.Env):
     def reset(self, seed=None, options=None):
         self.seed(seed)
 
-        high = np.array([0.9, 0.6])
-        low = np.array([0.8, 0.5])
+        high = np.array([0.9, 0.6], dtype=np.float32)
+        low = np.array([0.8, 0.5], dtype=np.float32)
         self.state = self.np_random.uniform(low=low, high=high)
-
         return self._get_obs(), {}
 
     def _get_obs(self):
         self.state[0] = np.clip(self.state[0], -2, 2)
         self.state[1] = np.clip(self.state[1], -2, 2)
-        return self.state
-        # return np.array(transition([np.cos(theta), np.sin(theta), thetadot]))
-
-    # def angle_normalize(self, x):
-    #     return (( (x + np.pi) % (2 * np.pi) ) - np.pi)
+        return self.state.astype(np.float32)

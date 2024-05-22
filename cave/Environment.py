@@ -1,5 +1,6 @@
 import os
 import random
+import inspect
 from collections import deque
 from typing import Any
 from typing import Union, Dict, Optional
@@ -192,10 +193,22 @@ class Environment(gym.Wrapper):
         _reward_ = reward
 
         if self.reward_api:
-            occured, violated = self.is_violated_func(
-                obs.reshape(1, -1), action.reshape(1, -1))
-            _reward_ = self.get_reward_func(obs.reshape(
-                1, -1), action.reshape(1, -1), reward, violated)
+            try:
+                occured, violated = self.is_violated_func(
+                    obs.reshape(1, -1), action.reshape(1, -1))
+            except Exception:
+                print(inspect.getsource(self.is_violated_func))
+                print(obs.reshape(1, -1))
+                print(action.reshape(1, -1))
+                raise Exception
+            try:
+                _reward_ = self.get_reward_func(obs.reshape(
+                    1, -1), action.reshape(1, -1), reward, violated)
+            except Exception:
+                print(inspect.getsource(self.get_reward_func))
+                print(obs.reshape(1, -1))
+                print(action.reshape(1, -1))
+                raise Exception
 
             # if truncated
             _reward_delta = float(reward - _reward_)

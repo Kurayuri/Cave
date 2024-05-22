@@ -153,6 +153,7 @@ class TrainTestAPI:
                                    **self.algo_kwargs)
             if isinstance(model, OffPolicyAlgorithm):
                 model.load_replay_buffer(self.curr_buffer_path)
+                util.log(f"Load {model.replay_buffer.size()} transitions.", level=CONST.INFO)
         else:
             # New Train
             model = self.ALGO(env=env,
