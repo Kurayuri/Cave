@@ -1,4 +1,5 @@
 import omnisafe
+import torch
 
 from typing import Callable, Sequence
 

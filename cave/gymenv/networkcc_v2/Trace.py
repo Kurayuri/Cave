@@ -1,6 +1,6 @@
 from ...import util
 from ...CONST import BITS_PER_BYTE, BYTES_PER_PACKET
-from ...import KEYWORD
+from ...import Keywords
 from ...import DEFAULT
 from bisect import bisect_right
 import argparse
@@ -469,27 +469,27 @@ def generate_trace_from_config(config: str, duration: int = 30) -> Trace:
 
     weights = []
     for env_config in config:
-        weight = env_config[KEYWORD.WEIGHT]
+        weight = env_config[Keywords.WEIGHT]
         assert weight >= 0
         weights.append(weight)
     # weights = [weight / weight_sum for weight in weights]
 
     env_config = random.choices(config, weights=weights, k=1)[0]
 
-    bandwidth_low_min, bandwidth_low_max = env_config[KEYWORD.BANDWIDTH_LOW]
-    bandwidth_high_min, bandwidth_high_max = env_config[KEYWORD.BANDWIDTH_HIGH]
-    latency_min, latency_max = env_config[KEYWORD.LATENCY]
-    loss_min, loss_max = env_config[KEYWORD.LOSS]
-    queue_size_min, queue_size_max = env_config[KEYWORD.QUEUE_SIZE]
+    bandwidth_low_min, bandwidth_low_max = env_config[Keywords.BANDWIDTH_LOW]
+    bandwidth_high_min, bandwidth_high_max = env_config[Keywords.BANDWIDTH_HIGH]
+    latency_min, latency_max = env_config[Keywords.LATENCY]
+    loss_min, loss_max = env_config[Keywords.LOSS]
+    queue_size_min, queue_size_max = env_config[Keywords.QUEUE_SIZE]
 
     ts_duration_min, ts_duration_max = env_config.get(
-        KEYWORD.TIMESTAMP_DURATION, (duration, duration))
+        Keywords.TIMESTAMP_DURATION, (duration, duration))
 
     # used by bandwidth generation
     delay_noise_min, delay_noise_max = env_config.get(
-                                                        KEYWORD.NOISE_LATENCY, (DEFAULT.NOISE_LATENCY, DEFAULT.NOISE_LATENCY))
+                                                        Keywords.NOISE_LATENCY, (DEFAULT.NOISE_LATENCY, DEFAULT.NOISE_LATENCY))
     ts_interval_bandwith_change_min, ts_interval_bandwith_change_max = env_config.get(
-                                                                                        KEYWORD.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
+                                                                                        Keywords.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
                                                                                         (DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE,
                                                                                         DEFAULT.TIMESTAMP_INTERVAL_BANDWIDTH_CHANGE))
 

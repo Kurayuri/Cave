@@ -1,4 +1,4 @@
-from ...CONST import BITS_PER_BYTE, BYTES_PER_PACKET
+from cave.Const import BITS_PER_BYTE, BYTES_PER_PACKET
 from .Trace import Trace
 from typing import Tuple
 import random
@@ -8,7 +8,7 @@ class Link():
     def __init__(self, trace: Trace):
         self.trace = trace
         self.reset()
-    
+
     def reset(self):
         self.trace.reset()
         self.queue_size = self.trace.queue_size

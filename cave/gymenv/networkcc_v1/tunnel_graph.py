@@ -1,8 +1,9 @@
-import sys
-import math
 import itertools
-import numpy as np
+import math
+import sys
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class TunnelGraph(object):

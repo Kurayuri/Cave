@@ -2,8 +2,15 @@
 
 __version__ = "0.0.1"
 
+__all__ = [
+    "TrainTestAPI",
+    "create_TrainTestAPI",
+    "gymenv",
+    "Environment"
+]
 
-from .TrainTestAPI import TrainTestAPI,maker_TrainTestAPI
-from .KEYWORD import *
+from .TrainTestAPI import TrainTestAPI, create_TrainTestAPI
+from .Keywords import *
 from .import gymenv
 from .Environment import Environment
+from .Settings import Settings, messager

@@ -7,8 +7,8 @@ import re
 from typing import Dict, Optional, Iterable
 
 import numpy as np
-from ..import CONST
-from ..import Setting
+from cave import Const
+from cave import Settings
 
 
 def load_json(filename):
@@ -114,37 +114,3 @@ def load_bo_json_log(file: str):
 def join_keywords(args: list):
     return "_".join(args)
 
-
-def log(*args, level=CONST.DEBUG, style=CONST.STYLE_RESET, end: str = "\n"):
-    if len(args) == 1 and (isinstance(args[0], tuple) or isinstance(args[0], list)):
-        args = args[0]
-    if level >= Setting.LogLevel:
-        print(style + " ".join(map(str, args)) + CONST.STYLE_RESET, end=end)
-
-
-def safe_divison(a, b):
-    try:
-        ans = a / b
-        return 0.0 if np.isnan(ans) or ans is None else ans
-    except:
-        return 0.0
-
-
-def ewma(iterable: Iterable[float], alpha: float, init_val: float | None = None, start: int | None = None, stop: int | None = None) -> float:
-    if init_val is None:
-        ans = 0
-        for x in iterable:
-            ans = x
-            break
-    else:
-        ans = init_val
-    n_alpha = 1 - alpha
-    if start is None and stop is None:
-        for x in iterable:
-            ans = n_alpha * ans + alpha * x
-    else:
-        start = start if start is not None else 0
-        stop = stop if stop is not None else len(iterable)
-        for i in range(start, stop):
-            ans = n_alpha * ans + alpha * iterable[i]
-    return ans

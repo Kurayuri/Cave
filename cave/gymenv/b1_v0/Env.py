@@ -1,8 +1,7 @@
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 from gymnasium.utils import seeding
-import numpy as np
-
 
 
 class Env(gym.Env):

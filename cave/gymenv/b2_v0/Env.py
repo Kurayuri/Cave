@@ -1,9 +1,7 @@
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 from gymnasium.utils import seeding
-import numpy as np
-import math
-from os import path
 
 
 class Env(gym.Env):
@@ -56,7 +54,7 @@ class Env(gym.Env):
         # if bool(abs(p_new) > 1.5 or abs(v_new) > 1.5):
         #     reward = -600
 
-        return self._get_obs(), reward, terminated,truncated, {}
+        return self._get_obs(), reward, terminated, truncated, {}
 
     def reset(self, seed=None, options=None):
         self.seed(seed)
@@ -64,7 +62,7 @@ class Env(gym.Env):
         low = np.array([0.7, 0.7])
         self.state = self.np_random.uniform(low=low, high=high)
 
-        return self._get_obs(),{}
+        return self._get_obs(), {}
 
     def _get_obs(self):
         self.state[0] = np.clip(self.state[0], -2, 2)

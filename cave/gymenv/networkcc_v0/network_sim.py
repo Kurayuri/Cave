@@ -12,9 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gymnasium as gym
+import gym
+from gym import spaces
+from gym.utils import seeding
+from gym.envs.registration import register
 import numpy as np
 import heapq
+import time
 import random
 import json
 import os
@@ -23,9 +27,8 @@ import inspect
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
 sys.path.insert(0,parentdir) 
-from ...common import sender_obs
-
-DELTA_SCALE = 1.0
+from common import sender_obs, config
+from common.simple_arg_parse import arg_or_default
 
 MAX_CWND = 5000
 MIN_CWND = 4
@@ -230,7 +233,7 @@ class Sender():
         return result
 
     def apply_rate_delta(self, delta):
-        delta *= DELTA_SCALE
+        delta *= config.DELTA_SCALE
         #print("Applying delta %f" % delta)
         if delta >= 0.0:
             self.set_rate(self.rate * (1.0 + delta))
@@ -238,7 +241,7 @@ class Sender():
             self.set_rate(self.rate / (1.0 - delta))
 
     def apply_cwnd_delta(self, delta):
-        delta *= DELTA_SCALE
+        delta *= config.DELTA_SCALE
         #print("Applying delta %f" % delta)
         if delta >= 0.0:
             self.set_cwnd(self.cwnd * (1.0 + delta))
@@ -338,13 +341,14 @@ class Sender():
         self.history = sender_obs.SenderHistory(self.history_len,
                                                 self.features, self.id)
 
-class Env(gym.Env):
+class SimulatedNetworkEnv(gym.Env):
     
     def __init__(self,
-                 history_len=10,
-                 features ="sent latency inflation,"
+                 history_len=arg_or_default("--history-len", default=10),
+                 features=arg_or_default("--input-features",
+                    default="sent latency inflation,"
                           + "latency ratio,"
-                          + "send ratio"):
+                          + "send ratio")):
         self.viewer = None
         self.rand = None
 
@@ -370,16 +374,16 @@ class Env(gym.Env):
         self.last_rate = None
 
         if USE_CWND:
-            self.action_space = gym.spaces.Box(np.array([-1e12, -1e12]), np.array([1e12, 1e12]), dtype=np.float32)
+            self.action_space = spaces.Box(np.array([-1e12, -1e12]), np.array([1e12, 1e12]), dtype=np.float32)
         else:
-            self.action_space = gym.spaces.Box(np.array([-1e12]), np.array([1e12]), dtype=np.float32)
+            self.action_space = spaces.Box(np.array([-1e12]), np.array([1e12]), dtype=np.float32)
                    
 
         self.observation_space = None
         use_only_scale_free = True
         single_obs_min_vec = sender_obs.get_min_obs_vector(self.features)
         single_obs_max_vec = sender_obs.get_max_obs_vector(self.features)
-        self.observation_space = gym.spaces.Box(np.tile(single_obs_min_vec, self.history_len),
+        self.observation_space = spaces.Box(np.tile(single_obs_min_vec, self.history_len),
                                             np.tile(single_obs_max_vec, self.history_len),
                                             dtype=np.float32)
 
@@ -390,12 +394,12 @@ class Env(gym.Env):
         self.episodes_run = -1
 
     def seed(self, seed=None):
-        self.rand= np.random(seed)
+        self.rand, seed = seeding.np_random(seed)
         return [seed]
 
     def _get_all_sender_obs(self):
         sender_obs = self.senders[0].get_obs()
-        sender_obs = np.array(sender_obs,dtype=np.float32).reshape(-1,)
+        sender_obs = np.array(sender_obs).reshape(-1,)
         #print(sender_obs)
         return sender_obs
 
@@ -437,7 +441,7 @@ class Env(gym.Env):
         should_stop = False
 
         self.reward_sum += reward
-        return sender_obs, reward, (self.steps_taken >= self.max_steps or should_stop),False, {}
+        return sender_obs, reward, (self.steps_taken >= self.max_steps or should_stop), {}
 
     def print_debug(self):
         print("---Link Debug---")
@@ -462,12 +466,14 @@ class Env(gym.Env):
         self.senders = [Sender(random.uniform(0.3, 1.5) * bw, [self.links[0], self.links[1]], 0, self.features, history_len=self.history_len)]
         self.run_dur = 3 * lat
 
-    def reset(self,seed=None,options=None):
+    def reset(self):
         self.steps_taken = 0
         self.net.reset()
         self.create_new_links_and_senders()
         self.net = Network(self.senders, self.links)
         self.episodes_run += 1
+        if self.episodes_run > 0 and self.episodes_run % 100 == 0:
+            self.dump_events_to_file("pcc_env_log_run_%d.json" % self.episodes_run)
         self.event_record = {"Events":[]}
         self.net.run_for_dur(self.run_dur)
         self.net.run_for_dur(self.run_dur)
@@ -475,7 +481,7 @@ class Env(gym.Env):
         self.reward_ewma += 0.01 * self.reward_sum
         print("Reward: %0.2f, Ewma Reward: %0.2f" % (self.reward_sum, self.reward_ewma))
         self.reward_sum = 0.0
-        return self._get_all_sender_obs(),{}
+        return self._get_all_sender_obs()
 
     def render(self, mode='human'):
         pass
@@ -489,5 +495,6 @@ class Env(gym.Env):
         with open(filename, 'w') as f:
             json.dump(self.event_record, f, indent=4)
 
+register(id='PccNs-v0', entry_point='network_sim:SimulatedNetworkEnv')
 #env = SimulatedNetworkEnv()
 #env.step([1.0])

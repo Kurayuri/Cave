@@ -1,9 +1,10 @@
+import imp
+from optparse import NO_DEFAULT
 import os
 import random
 import inspect
 from collections import deque
-from typing import Any
-from typing import Union, Dict, Optional
+from typing import Any, Callable
 
 import gymnasium as gym
 import numpy as np
@@ -13,14 +14,15 @@ from stable_baselines3.common.on_policy_algorithm import OnPolicyAlgorithm
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import obs_as_tensor, safe_mean
 
-from .import CONST
-from .import util
-from .util.lib import safe_divison, ewma
+from cave import Const
+from cave import utils
+from cave.Settings import messager
+from libpycom.math import safe_div, ewma
 
 
-def maker_Environment(env_id, env_kwargs, env_options: dict = {},
-                      reward_api: Union[str, Dict[str, callable]] = None,
-                      log_dirpath: str = ""):
+def make_Environment_fn(env_id, env_kwargs, env_options: dict = {},
+                        reward_api: str | dict[str, Callable] | None = None,
+                        log_dirpath: str = ""):
     def _maker_():
         return Monitor(Environment(env_id, env_kwargs, env_options, reward_api, log_dirpath))
     return _maker_
@@ -76,7 +78,7 @@ class Environment(gym.Wrapper):
     LOG_MODE_ADD_ARG = 2
 
     def __init__(self, env_id, env_kwargs, env_options: dict = {},
-                 reward_api: Optional[Union[str, Dict[str, callable]]] = None,
+                 reward_api: str | dict[str, Callable] | None = None,
                  log_dirpath: str = ""):
         env = gym.make(env_id, **env_kwargs)
 
@@ -85,8 +87,8 @@ class Environment(gym.Wrapper):
         self.reward_api = reward_api
         self.env_options = env_options
 
-        self.is_violated_func = None
-        self.get_reward_func = None
+        self.fn_is_violated = None
+        self.fn_get_reward = None
 
         self.log_dirpath = log_dirpath
 
@@ -97,27 +99,27 @@ class Environment(gym.Wrapper):
         if self.reward_api:
             try:
                 if isinstance(self.reward_api, dict):
-                    self.is_violated_func = self.reward_api[self.IS_VIOLATED_FUNC_ID]
-                    self.get_reward_func = self.reward_api[self.GET_REWARD_FUNC_ID]
+                    self.fn_is_violated = self.reward_api[self.IS_VIOLATED_FUNC_ID]
+                    self.fn_get_reward = self.reward_api[self.GET_REWARD_FUNC_ID]
                 elif isinstance(self.reward_api, str):
                     try:
                         exec(self.reward_api)
-                        self.is_violated_func = locals()[
+                        self.fn_is_violated = locals()[
                             self.IS_VIOLATED_FUNC_ID]
-                        self.get_reward_func = locals()[
+                        self.fn_get_reward = locals()[
                             self.GET_REWARD_FUNC_ID]
                     except BaseException as e:
                         with open(self.reward_api) as f:
                             exec(f.read())
 
-                        self.is_violated_func = locals()[
+                        self.fn_is_violated = locals()[
                             self.IS_VIOLATED_FUNC_ID]
-                        self.get_reward_func = locals()[
+                        self.fn_get_reward = locals()[
                             self.GET_REWARD_FUNC_ID]
             except BaseException as e:
                 raise BaseException("Invalid reward_api.")
-
-        util.log(f"Reward API: {self.reward_api}", level=CONST.DEBUG)
+        self.messager = messager
+        self.messager.debug(f"Reward API: {self.reward_api}")
 
         # Reward Trace
         setattr(self, self.ATTR_REWARD_TRACE, [])
@@ -194,18 +196,18 @@ class Environment(gym.Wrapper):
 
         if self.reward_api:
             try:
-                occured, violated = self.is_violated_func(
+                occured, violated = self.fn_is_violated(
                     obs.reshape(1, -1), action.reshape(1, -1))
             except Exception:
-                print(inspect.getsource(self.is_violated_func))
+                print(inspect.getsource(self.fn_is_violated))
                 print(obs.reshape(1, -1))
                 print(action.reshape(1, -1))
                 raise Exception
             try:
-                _reward_ = self.get_reward_func(obs.reshape(
+                _reward_ = self.fn_get_reward(obs.reshape(
                     1, -1), action.reshape(1, -1), reward, violated)
             except Exception:
-                print(inspect.getsource(self.get_reward_func))
+                print(inspect.getsource(self.fn_get_reward))
                 print(obs.reshape(1, -1))
                 print(action.reshape(1, -1))
                 raise Exception
@@ -315,6 +317,7 @@ class CallBack(BaseCallback):
         # Clear Reward Trace
         self.training_env.set_attr(Environment.ATTR_REWARD_TRACE, [])
 
+        # NOTE
         # In Stable Baseline3, callback is called after return and advantage computaion for OnPolicyAlgorithm
         # File path: stable_baselines3/common/on_policy_algorithm.py
         ###
@@ -329,11 +332,11 @@ class CallBack(BaseCallback):
 
     def module_tensorboard_record(self):
         infos = self.locals["infos"]
-        buffer_shift = self.update_info_buffer(infos)
+        buffer_shift_len = self.update_info_buffer(infos)
         self.logger.dump(self.num_timesteps - self.nproc)
         ep_info_buffer = self.ep_info_buffer
 
-        if buffer_shift:
+        if buffer_shift_len:
             ep_lens = [info[self.INFO_KEY_MONITOR]["l"]
                        for info in ep_info_buffer]
             ep_rewards = [info[self.INFO_KEY_MONITOR]["r"]
@@ -345,7 +348,7 @@ class CallBack(BaseCallback):
             self.ep_reward_ewma = ewma(
                 ep_rewards, self.REWARD_EWMA_ALPHA,
                 init_val=self.ep_reward_ewma,
-                start=max(buffer_len - buffer_shift, 0),
+                start=max(buffer_len - buffer_shift_len, 0),
                 stop=buffer_len
             )
             # for i in range(max(buffer_len - buffer_shift, 0), buffer_len):
@@ -368,7 +371,7 @@ class CallBack(BaseCallback):
                 self.ep_reward_raw_ewma = ewma(
                     ep_rewards_raw, self.REWARD_EWMA_ALPHA,
                     init_val=self.ep_reward_raw_ewma,
-                    start=max(buffer_len - buffer_shift, 0),
+                    start=max(buffer_len - buffer_shift_len, 0),
                     stop=buffer_len
                 )
                 ep_reward_raw_mean = safe_mean(ep_rewards_raw)
@@ -393,25 +396,26 @@ class CallBack(BaseCallback):
                     "rollout/cave_sum_violated_mean", sum(self.sum_violateds))
 
                 self.logger.record(
-                    "rollout/cave_epr_occurred_mean", safe_divison(ep_occurred_mean, ep_len_mean))
+                    "rollout/cave_epr_occurred_mean", safe_div(ep_occurred_mean, ep_len_mean))
                 self.logger.record(
-                    "rollout/cave_epr_violated_mean", safe_divison(ep_violated_mean, ep_len_mean))
+                    "rollout/cave_epr_violated_mean", safe_div(ep_violated_mean, ep_len_mean))
                 self.logger.record(
-                    "rollout/cave_epr_vo_mean", safe_divison(ep_violated_mean, ep_occurred_mean))
+                    "rollout/cave_epr_vo_mean", safe_div(ep_violated_mean, ep_occurred_mean))
 
                 self.logger.record("rollout/cave_epd_reward_delta_mean",
-                                   safe_divison(ep_reward_delta_mean, ep_violated_mean))
+                                   safe_div(ep_reward_delta_mean, ep_violated_mean))
 
     def update_info_buffer(self, infos):
-        buffer_shift = 0
+        buffer_shift_len = 0
         self.sum_occurred = []
-        for idx, info in enumerate(infos):
+        for proc_idx, info in enumerate(infos):
+            # Extract Cave info
             maybe_info = {k: info[k] for k in self.INFO_KEYS if k in info}
             if maybe_info:
-                buffer_shift += 1
+                buffer_shift_len += 1
                 self.ep_info_buffer.extend([maybe_info])
                 if self.INFO_KEY_CAVE in maybe_info:
-                    self.sum_violateds[idx] = maybe_info[self.INFO_KEY_CAVE][Environment.LOG_SUM_VIOLATED]
-                    self.sum_occurreds[idx] = maybe_info[self.INFO_KEY_CAVE][Environment.LOG_SUM_OCCURRED]
+                    self.sum_violateds[proc_idx] += maybe_info[self.INFO_KEY_CAVE].get(Environment.LOG_SUM_VIOLATED, 0)
+                    self.sum_occurreds[proc_idx] += maybe_info[self.INFO_KEY_CAVE].get(Environment.LOG_SUM_OCCURRED, 0)
 
-        return buffer_shift
+        return buffer_shift_len

@@ -1,49 +1,57 @@
+import argparse
+import enum
+import json
+import os
+from re import T
+import warnings
+from collections import OrderedDict
+from typing import Callable, Iterable, Tuple, Union
+
+import numpy as np
+import stable_baselines3
 import stable_baselines3.common
 import stable_baselines3.common.base_class
 import stable_baselines3.common.off_policy_algorithm
-from .Environment import CallBack, maker_Environment, Environment
-from .import KEYWORD
-from .import util
-from .import CONST
-from .import interface
-
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.callbacks import (EvalCallback, StopTrainingOnMaxEpisodes,
+                                                StopTrainingOnNoModelImprovement, StopTrainingOnRewardThreshold)
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.noise import NormalActionNoise
-from stable_baselines3.common.callbacks import EvalCallback, StopTrainingOnNoModelImprovement, StopTrainingOnMaxEpisodes, StopTrainingOnRewardThreshold
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
-from stable_baselines3.common.base_class import BaseAlgorithm
+from stable_baselines3.common.vec_env import SubprocVecEnv
 from wandb.integration.sb3 import WandbCallback
-from collections import OrderedDict
-from typing import Any, Union, Iterable, Callable, Tuple
-import stable_baselines3
-import numpy as np
-import argparse
-import warnings
-import wandb
-import torch
 
-import json
-import os
 
+from cave import Const, Keywords, interface
+from cave.Settings import messager
+from cave.Environment import CallBack, Environment, make_Environment_fn
 
 os.environ['CUDA_VISIBLE_DEVICES'] = ""
 warnings.filterwarnings("ignore")
 
 
-def maker_TrainTestAPI(**kwargs):
-    def _maker_(**kargs):
+def create_TrainTestAPI(**kwargs):
+    def _creator(**kargs):
         for kw, arg in kwargs.items():
             kargs[kw] = arg
             if kw in kargs:
-                util.log(f"Warning: {TrainTestAPI.__name__} got multiple values for keyword argument '{kw}'")
+
+                messager.warning(f"Warning: {TrainTestAPI.__name__} got multiple values for keyword argument '{kw}'")
 
         api = TrainTestAPI(**kargs)
         return api.ans
-    return _maker_
+    return _creator
+
+
+class TrainTestAPIFlag(enum.Flag):
+    WANDB = enum.auto()
+    TRACEBACK = enum.auto()
+    TRAIN = enum.auto()
+    TEST = enum.auto()
 
 
 class TrainTestAPI:
+
     ALGOS = {
         "A2C": stable_baselines3.A2C,
         "DDPG": stable_baselines3.DDPG,
@@ -63,7 +71,7 @@ class TrainTestAPI:
                  next_model_dirpath: str = None,
                  model_filename: str = "Model.zip",
                  onnx_filename: str = "model.onnx",
-                 reward_api: Union[callable, str] = None,
+                 reward_api: Union[Callable, str] = None,
                  enabled_trace: bool = False,
                  test_log_filename: str = "test.log",
                  total_cycle: Union[int, Tuple[int, str]] = 100,
@@ -73,9 +81,11 @@ class TrainTestAPI:
                  eval_freq: int = 10000,
                  eval_episode: int = 100,
                  test_episode: int = 100,
-                 use_wandb: bool = False
+                 enabled_wandb: bool = False
                  ):
         # Init ALGO
+        # TODO
+        self.messager = messager
 
         # Initialize path
         assert curr_model_dirpath or next_model_dirpath, 'At least one of <curr_model_dirpath> and <next_model_dirpath> is required.'
@@ -89,7 +99,7 @@ class TrainTestAPI:
         self.model_filename = model_filename
         self.onnx_filename = onnx_filename
         self.reward_api = reward_api
-        self.enabled_trace = enabled_trace
+        self.enabled_traceback = enabled_trace
         self.test_log_filename = test_log_filename
         self.total_timestep = total_cycle
         self.mode = mode
@@ -98,9 +108,9 @@ class TrainTestAPI:
         self.eval_freq = eval_freq
         self.eval_episode = eval_episode
         self.test_episode = test_episode
-        self.use_wandb = use_wandb
+        self.enabled_wandb = enabled_wandb
 
-        self.ALGO = self.ALGOS[algo]
+        self.Algo = TrainTestAPI.ALGOS[algo]
         self.buffer_filename = "buffer"
 
         self.curr_model_path, self.curr_buffer_path = (
@@ -115,37 +125,38 @@ class TrainTestAPI:
         ) if next_model_dirpath else (None, None, None)
 
         self.ans = None
-        if mode == KEYWORD.TRAIN:
+        if mode == Keywords.TRAIN:
             self.train()
-        elif mode == KEYWORD.TEST:
+        elif mode == Keywords.TEST:
             self.test()
 
     def train(self):
         os.makedirs(self.next_model_dirpath, exist_ok=True)
 
-        self.reward_api = self.__class__.detect_reward_api(
+        self.reward_api = TrainTestAPI.detect_reward_api(
             self.reward_api, self.next_model_dirpath)
         # print(self.reward_api)
         # Use SubprocVecEnv
+
         if self.nproc > 1:
-            log_dirpaths = self.__class__.get_dirpaths(self.next_model_dirpath,
-                                                       self.nproc)
+            log_dirpaths = TrainTestAPI.get_dirpaths(self.next_model_dirpath,
+                                                     self.nproc)
             env = SubprocVecEnv([
-                maker_Environment(self.env_id, self.env_kwargs,
-                                  self.env_options, self.reward_api,
-                                  log_dirpath) for log_dirpath in log_dirpaths
+                make_Environment_fn(self.env_id, self.env_kwargs,
+                                    self.env_options, self.reward_api,
+                                    log_dirpath) for log_dirpath in log_dirpaths
             ],
                 start_method='fork')
         else:
             log_dirpaths = [self.next_model_dirpath]
-            env = maker_Environment(self.env_id, self.env_kwargs,
-                                    self.env_options, self.reward_api,
-                                    log_dirpaths[0])()
+            env = make_Environment_fn(self.env_id, self.env_kwargs,
+                                      self.env_options, self.reward_api,
+                                      log_dirpaths[0])()
 
         model: BaseAlgorithm
         if self.curr_model_path is not None:
             # Resuming Train
-            model = self.ALGO.load(self.curr_model_path,
+            model = self.Algo.load(self.curr_model_path,
                                    env=env,
                                    #    tensorboard_log=self.next_model_dirpath,
                                    tensorboard_log=os.path.dirname(
@@ -153,10 +164,10 @@ class TrainTestAPI:
                                    **self.algo_kwargs)
             if isinstance(model, OffPolicyAlgorithm):
                 model.load_replay_buffer(self.curr_buffer_path)
-                util.log(f"Load {model.replay_buffer.size()} transitions.", level=CONST.INFO)
+                self.messager.info(f"Load {model.replay_buffer.size()} transitions.", level=Const.INFO)
         else:
             # New Train
-            model = self.ALGO(env=env,
+            model = self.Algo(env=env,
                               verbose=0,
                               #   tensorboard_log=self.next_model_dirpath,
                               tensorboard_log=os.path.dirname(
@@ -165,8 +176,8 @@ class TrainTestAPI:
                               **self.algo_kwargs)
 
         # Callback
-        eval_env = SubprocVecEnv([maker_Environment(self.env_id, self.env_kwargs,
-                                                    self.env_options) for i in range(self.eval_nproc)], start_method='fork')
+        eval_env = SubprocVecEnv([make_Environment_fn(self.env_id, self.env_kwargs,
+                                                      self.env_options) for i in range(self.eval_nproc)], start_method='fork')
         no_improvement_callback = StopTrainingOnNoModelImprovement(
             max_no_improvement_evals=3, min_evals=5, verbose=1)
         no_improvement_callback = None
@@ -184,13 +195,15 @@ class TrainTestAPI:
 
         callback = []
         callback.append(eval_callback if self.eval_freq else None)
-        if self.use_wandb:
+        if self.enabled_wandb:
             callback.append(WandbCallback(
                 # gradient_save_freq=100, model_save_path=f"models/{run.id}",
                 verbose=2,
             ))
-        callback.append(CallBack(self.enabled_trace)
-                        ) if self.reward_api else None
+        # FIX
+        # callback.append(CallBack(self.enabled_traceback)
+        #                 ) if self.reward_api else None
+        callback.append(CallBack(self.enabled_traceback))
 
         # Learn
         model.learn(total_timesteps=self.total_timestep,
@@ -211,7 +224,7 @@ class TrainTestAPI:
         cave_info["num_timesteps"] = model.num_timesteps
         print(cave_info)
 
-        self.__class__.gather_log(log_dirpaths, self.next_model_dirpath)
+        TrainTestAPI.gather_log(log_dirpaths, self.next_model_dirpath)
 
         # Save
         model.save(self.next_model_path)
@@ -230,20 +243,20 @@ class TrainTestAPI:
     def test(self):
         assert self.curr_model_dirpath, '<curr_model_dirpath> is required.'
 
-        self.reward_api = self.__class__.detect_reward_api(
+        self.reward_api = TrainTestAPI.detect_reward_api(
             self.reward_api, self.curr_model_dirpath)
 
         env = SubprocVecEnv(
             [
-                maker_Environment(self.env_id, self.env_kwargs,
-                                  self.env_options, self.reward_api)
+                make_Environment_fn(self.env_id, self.env_kwargs,
+                                    self.env_options, self.reward_api)
                 for rank in range(self.nproc)
             ],
-            start_method='fork') if self.nproc > 1 else maker_Environment(
+            start_method='fork') if self.nproc > 1 else make_Environment_fn(
                 self.env_id, self.env_kwargs, self.env_options,
                 self.reward_api)()
 
-        model = self.ALGO.load(self.curr_model_path,
+        model = self.Algo.load(self.curr_model_path,
                                env=env,
                                )
 
@@ -276,35 +289,6 @@ class TrainTestAPI:
         self.ans = result
         return result
 
-    # @classmethod
-    # def extract_onnxable_model(cls, model):
-    #     onnxable_model = None
-    #     if isinstance(model, stable_baselines3.DDPG):
-    #         onnxable_model = model.policy.actor.mu
-    #     elif isinstance(model, stable_baselines3.DQN):
-    #         onnxable_model = model.policy.q_net.q_net
-    #     elif isinstance(model, stable_baselines3.PPO):
-
-    #         class OnnxablePolicy(torch.nn.Module):
-
-    #             def __init__(self, model):
-    #                 super().__init__()
-    #                 self.extractor = model.policy.mlp_extractor
-    #                 self.action_net = model.policy.action_net
-    #                 self.value_net = model.policy.value_net
-
-    #             def forward(self, observation):
-    #                 action_hidden, value_hidden = self.extractor(observation)
-    #                 return self.action_net(action_hidden)
-
-    #         onnxable_model = OnnxablePolicy(model)
-
-    #     elif isinstance(model, stable_baselines3.SAC):
-    #         onnxable_model = model.policy.actor.latent_pi
-    #     elif isinstance(model, stable_baselines3.TD3):
-    #         onnxable_model = model.policy.actor.mu
-    #     return onnxable_model
-
     @classmethod
     def detect_reward_api(cls, reward_api, path: str = ""):
         if isinstance(reward_api, str):
@@ -335,7 +319,7 @@ class TrainTestAPI:
                     with open(src_path, "r") as src_file:
                         dst_file.write(src_file.read())
                 except BaseException:
-                    util.log(f"No such file: {src_path}", level=CONST.DEBUG)
+                    messager.warning(f"No such file: {src_path}", level=Const.DEBUG)
             dst_file.close()
 
     # def gather_info(self, infos):
@@ -355,7 +339,7 @@ class TrainTestAPI:
                     src_path = os.path.join(src_dirpath, log_filename)
                     src_files.append(open(src_path, "r"))
                 except BaseException:
-                    util.log(f"No such file: {src_path}", level=CONST.DEBUG)
+                    messager.warning(f"No such file: {src_path}", level=Const.DEBUG)
 
             counter = 1
             while counter:
